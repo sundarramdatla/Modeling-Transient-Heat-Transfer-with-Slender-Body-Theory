@@ -1,0 +1,640 @@
+import numpy as np
+import matplotlib.pyplot as plt
+import scipy.special as sc
+import scipy.integrate as integrate
+import pandas as pd
+from scipy.optimize import curve_fit
+
+
+
+k = 1
+alpha = 1e-6
+t = np.logspace(2, 9, 150)
+R = 0.05
+N_points = 10
+L = 10 / N_points
+mesh_points = (np.arange(N_points)+ 0.5) * L
+midpoint = mesh_points[N_points//2]
+Q = np.zeros((mesh_points.size, t.size))
+T_0 = 10
+N_fls = 10
+
+mid = N_points//2
+end = N_points -1
+
+R_r = np.linspace(R*1.001, R*1.2, 20)
+
+THETA = np.linspace(0, 2* np.pi, 20, endpoint= False)
+Z_middle =  np.linspace(0, 10, 40)
+Z_negative = np.linspace(-1, -30, 10)
+Z_positive = np.linspace(11, 30, 10)
+Z = np.concatenate((Z_negative, Z_middle, Z_positive))
+r, theta, z = np.meshgrid(R_r, THETA, Z, indexing='ij')
+
+e_inner = 1
+centerline = np.zeros((mesh_points.size, 3))
+centerline[:, 2] = mesh_points
+center_z = centerline[:, 2]
+
+dz = z[..., None] - center_z[None, None, None, :]
+dist = np.sqrt(r[...,None]**2 + dz**2)
+
+dist_min = np.min(dist, axis =-1)
+mask = dist_min < e_inner
+
+inner_regime = np.column_stack((r[mask], theta[mask], z[mask]))
+print(inner_regime.shape)
+
+
+rmin = R * (1 + 1e-6)   
+rmax = R * 1.2
+
+keep = (inner_regime[:,0] >= rmin) & (inner_regime[:,0] <= rmax)
+inner_regime = inner_regime[keep]
+
+print("Filtered inner_regime shape:", inner_regime.shape)
+
+
+T_inner = np.zeros((inner_regime.shape[0], t.size))
+
+
+
+def NearestCenterlinePoint(x):
+    r0, t0, z0 = x
+    distance = np.sqrt(r0**2 + (z0 - center_z)**2)
+    min_dist = distance.min()
+    idx = distance.argmin()
+    return idx, min_dist
+
+
+def Discretize(j):
+    z0 = j * L
+    z1 = (j+1) * L
+    dz = (z1 - z0) / N_fls
+    z = z0 + (np.arange(N_fls) + 0.5) * dz
+    return z, dz
+
+def SelectedPipeCurrentPulseDecisionTree(R_CP, L_CP): #f_i_i_m_m entry
+    if R_CP > 70:
+        if L_CP < .05:
+            a = 1/(4*R_CP)
+            decision_taken = "ILS"
+            return (1/(4*np.pi*k)* sc.exp1(a)), decision_taken #ILS
+        elif L_CP >= 0.05: 
+            decision_taken = "FLS"
+            a = 1/(4*R_CP)
+            b = 1/(4*L_CP)
+            integral_val, integral_err = integrate.quad(lambda x: (1/x)*sc.erfc(1/2 * np.sqrt(x)),b, np.inf)
+            return (1/(4*np.pi*k) * sc.exp1(a)) - (1/(4*np.pi*k)* integral_val), decision_taken  #FLS
+    elif R_CP <= 70:
+        if L_CP < 0.03:
+            decision_taken = "ICS"
+            integral_val, integral_err = integrate.quad(lambda x: (1-np.exp(-x**2 *R_CP))/(x**3 *(sc.j1(x)**2 + sc.y1(x)**2)), 0, np.inf)
+            return (2/(np.pi**3 * k) * integral_val ), decision_taken #ICS
+        elif L_CP >= .03:
+            decision_taken = "FCS"
+            b = 1/(4*L_CP)
+            integral_val, integral_err = integrate.quad(lambda x: (1-np.exp(-x**2 *R_CP))/(x**3 *(sc.j1(x)**2 + sc.y1(x)**2)), 0, np.inf)
+            integral_val2, integral_err2 = integrate.quad(lambda x: (1/x)*sc.erfc(1/2 * np.sqrt(x)),b, np.inf)
+            return (2/(np.pi**3 * k) * integral_val - (1/(4*np.pi*k)) * integral_val2), decision_taken #FCS
+    
+def SelectedPipePreviousPulseDecisionTree(m, L):
+    decision = ""
+    f = np.zeros(m-1)
+    p = 0
+    for n in range(1, m):
+
+        RPPS = alpha*(t[m] - t[n-1]) / R_j**2
+        LPPS = alpha * (t[m] - t[n-1]) / L**2
+        SLR = 0
+        SPPS = 0.04
+        
+        
+        RPPE = alpha*(t[m] - t[n]) / R_j**2 
+        LPPE = alpha*(t[m] - t[n]) / L**2
+        SPPE = 100
+        
+        TDR = (t[m] - t[n]) / (t[n] - t[n-1])
+
+        if LPPE > 10:
+            if TDR > 7:
+                decision = "PS3"
+                f_i_i_m_n = L/(8*np.pi*k*TDR*np.sqrt(alpha*np.pi*(t[m] - t[n]))) #PS3
+            elif TDR <= 7:
+                decision = "PS2"
+                f_i_i_m_n = L/(4*np.pi*np.sqrt(alpha*np.pi*k)) * (1/np.sqrt((t[m] - t[n])) - 1/np.sqrt((t[m] - t[n-1]))) #PS2
+        elif LPPE <= 10:
+            if RPPE > 1000:
+                if LPPS < 0.02:
+                        decision = "ILS"
+                        a = 1/(4*RPPS)
+                        b = 1/(4*RPPE)
+                        f_i_i_m_n = 1 / (4*np.pi*k) * (sc.exp1(a) - sc.exp1(b)) #ILS
+                elif LPPS >= 0.02:
+                        decision = "FLS"
+                        a = 1/(4*RPPS)
+                        b = 1/(4*RPPE)
+                        c = 1/(4*LPPS)
+                        d = 1/(4*LPPE)
+                        integral_val, integral_err = integrate.quad(lambda x: (1/x) * sc.erfc(1/2 * np.sqrt(x)), c, d)
+                        f_i_i_m_n = 1 / (4*np.pi*k) * (sc.exp1(a) - sc.exp1(b) - integral_val) #FLS
+            elif RPPE <= 1000:
+                if LPPS < 0.01:
+                    decision = "ICS"
+                    integral_val2, integral_err2 = integrate.quad(
+    lambda x: (np.exp(-x**2 * RPPE) - np.exp(-x**2 * RPPS)) / (x**3 * (sc.j1(x)**2 + sc.y1(x)**2)),
+    0, np.inf       #ICS
+)
+                    f_i_i_m_n = 2/(np.pi**3 * k) * integral_val2
+                elif LPPS >= 0.01:
+                    decision = "FCS"
+                    c = 1/(4*LPPS)
+                    d = 1/(4*LPPE)
+                    integral_val3, integral_err3 = integrate.quad(
+                    lambda x: (np.exp(-x**2 * RPPE) - np.exp(-x**2 * RPPS)) / (x**3 * (sc.j1(x)**2 + sc.y1(x)**2)), 0, np.inf)
+                    integral_val, integral_err = integrate.quad(lambda x: (1/x) * sc.erfc(1/2 * np.sqrt(x)), c, d)
+                    f_i_i_m_n = 2/(np.pi**3*k) * integral_val3 - 1/(4*np.pi*k) * integral_val
+        
+        f[p] = f_i_i_m_n
+        p += 1
+    return f, decision     
+
+def NeighboringPipesPreviousPulseDecisionTree(L, m, i):
+
+    
+    decision = ""
+    f = np.zeros((mesh_points.size - 1)*(m-1))
+    p = 0
+
+    for j in range(mesh_points.size):
+
+        if j != i:
+
+            for n in range (1, m):
+                 
+                RPPS = alpha*(t[m] - t[n-1]) / R_j**2
+                LPPS = alpha * (t[m] - t[n-1]) / L**2
+                # S_ij = 1
+                # S_ij = np.abs(j - i) * L
+                # SLR = S_ij/L
+                # S_CP = (alpha * (t[m] - t[m-1])) / S_ij ** 2
+                SLR = 0
+                SPPS = 0.04
+                # SPPS = (alpha * (t[m] - t[n-1])) / S_ij **2
+                RPPE = alpha*(t[m] - t[n]) / R_j**2 
+                LPPE = alpha*(t[m] - t[n]) / L**2
+                SPPE = 100
+                # SPPE = (alpha * (t[m] - t[n])) / S_ij ** 2
+                TDR = (t[m] - t[n]) / (t[n] - t[n-1])
+
+                if SPPS < 0.04:
+                    f_i_j_m_n = 0
+                elif SPPS >= 0.04:
+                    if SLR > 4:
+                        if SPPE > 4:
+                            if TDR > 7:
+                                decision = "PS3"
+                                f_i_j_m_n = L/(8*np.pi*k*TDR*np.sqrt(alpha*np.pi*(t[m] - t[n]))) #PS3
+                        
+                            elif TDR <= 7:
+                                decision = "PS2"
+                                f_i_j_m_n = L/(4*np.pi*np.sqrt(alpha*np.pi*k)) * (1/ np.sqrt((t[m] - t[n])) - 1/np.sqrt((t[m] - t[n-1]))) #PS2
+                                        
+                        elif SPPE <= 4:
+                            decision = "PS1"
+                            f_i_j_m_n = 1/ (4*np.pi*k*SLR) * (sc.erfc(1/(2*np.sqrt(SPPS))) - sc.erfc(1/(2*np.sqrt(SPPE)))) #PS1
+                                              
+                    elif SLR <= 4:
+                        if (SLR > 2 and SPPE > 0.2):
+                            if SPPE > 4:
+                                if TDR > 7:
+                                    decision = "PS3"
+                                    f_i_j_m_n = L/(8*np.pi*k*TDR*np.sqrt(alpha*np.pi*(t[m] - t[n]))) #PS3
+                                    
+                                
+                                if TDR <= 7:
+                                    decision = "PS2"
+                                    f_i_j_m_n = L/(4*np.pi*np.sqrt(alpha*np.pi*k)) * (1/ np.sqrt((t[m] - t[n])) - 1/np.sqrt((t[m] - t[n-1])))          #PS2
+                                   
+                            elif SPPE <= 4:
+                                decision = "PS1"
+                                f_i_j_m_n = 1/ (4*np.pi*k*SLR) * (sc.erfc(1/(2*np.sqrt(SPPS))) - sc.erfc(1/(2*np.sqrt(SPPE))))   
+                                                  #PS1
+                        elif SLR <= 2 or SPPE <= 0.2:
+                            if SLR > 0.1 and SPPE > 100:
+                                if SPPE > 4:
+                                    if TDR > 7:
+                                        decision = "PS3"
+                                        f_i_j_m_n = L/(8*np.pi*k*TDR*np.sqrt(alpha*np.pi*(t[m] - t[n]))) #PS3
+                                       
+                                      
+                                    if TDR <= 7:
+                                        decision = "PS2"
+                                        f_i_j_m_n = L/(4*np.pi*np.sqrt(alpha*np.pi*k)) * (1/ np.sqrt((t[m] - t[n])) - 1/np.sqrt((t[m] - t[n-1])))          #PS2
+                                       
+                                elif SPPE <= 4:
+                                    decision = "PS1"
+                                    f_i_j_m_n = 1/ (4*np.pi*k*SLR) * (sc.erfc(1/(2*np.sqrt(SPPS))) - sc.erfc(1/(2*np.sqrt(SPPE))))
+                                                      #PS1
+                            elif SLR <= 0.1 or SPPE <= 100:
+                                decision = "FLS"
+                                f_i_j_m_n = 0
+                                z, dz = Discretize(j)
+                                for zp in z:
+                                    r = np.sqrt(R**2 + (mesh_points[i]- zp)**2)
+                                    f_i_j_m_n += (1/r) * (sc.erfc(r/(np.sqrt(4*alpha*(t[m] - t[n-1])))) - sc.erfc(r/(np.sqrt(4*alpha*(t[m] - t[n]))))) * dz
+                                f_i_j_m_n = (1/(4*np.pi*k)) * f_i_j_m_n
+                f[p] = f_i_j_m_n
+                p +=1
+                
+        elif j == i:
+            continue
+    return f, decision
+        
+            
+    
+     
+
+
+
+def NeighboringPipeCurrentPulseDecisionTree(i):
+    f = np.zeros(mesh_points.size - 1)
+    p = 0
+    decision = ""
+
+    for j in range(mesh_points.size):
+        if j == i:
+            continue
+
+        # S_ij = abs(j - i) * L
+        # S_ij = 1
+        # SLR = S_ij / L
+        # S_CP = alpha * (t[m] - t[m-1]) / (S_ij**2)
+
+        if S_CP < 0.04:
+            decision = "PN"
+            f[p] = 0.0
+
+        else:
+            if SLR > 4:
+                if S_CP > 4:
+                    decision = "PS2"
+                    f[p] = (1/(4*np.pi*k*SLR)) * (1 - 1/np.sqrt(np.pi*S_CP))
+                else:
+                    decision = "PS1"
+                    f[p] = (1/(4*np.pi*k*SLR)) * sc.erfc(1/(2*np.sqrt(S_CP)))
+
+            else:  # SLR <= 4
+                if (SLR > 2) and (S_CP > 0.2):
+                    decision = "PS1"
+                    f[p] = (1/(4*np.pi*k*SLR)) * sc.erfc(1/(2*np.sqrt(S_CP)))
+                else:
+                    # FLS: do the segment integral for THIS neighbor j
+                    decision = "FLS"
+                    zseg, dzseg = Discretize(j)
+                    acc = 0.0
+                    for zp in zseg:
+                        rr = np.sqrt(R**2 + (mesh_points[i] - zp)**2)
+                        acc += (1/rr) * sc.erfc(rr / np.sqrt(4*alpha*(t[m] - t[m-1]))) * dzseg
+                    f[p] = (1/(4*np.pi*k)) * acc
+
+        p += 1
+
+    return f, decision
+
+
+def Q_history(Q,i, m):
+
+    Q_history_matrix = np.delete(Q, i, axis = 0)
+    Q_sub = Q_history_matrix[:, 1:m]
+    return Q_sub.reshape(-1)
+
+
+F = np.zeros((mesh_points.size, mesh_points.size))
+A = np.zeros(mesh_points.size)
+debug_decision_array = np.full((mesh_points.size, t.size), '' ,dtype = "S3")
+
+for m in range(1, len(t)):
+    
+    for i in range(mesh_points.size):
+
+
+        R_j = R
+        R_CP = (alpha*(t[m] - t[m-1])) / (R_j)**2  
+        L_CP = (alpha * (t[m] - t[m-1])) / L**2  
+        SLR = 0
+        S_CP = 0.04
+        f_self_current, decision = SelectedPipeCurrentPulseDecisionTree(R_CP,L_CP) 
+        f_self_previous, decision_previous = SelectedPipePreviousPulseDecisionTree(m, L) 
+        debug_decision_array[i, m] = decision
+        f_neighbors_current, decision_neighbor_current = NeighboringPipeCurrentPulseDecisionTree(i)
+        
+        f_neighbors_previous, decision_neighbor_previous = NeighboringPipesPreviousPulseDecisionTree(L,m,i)
+     
+        Q_history_vector = Q_history(Q, i, m)
+        H = np.dot(f_self_previous, Q[i, 1:m]) + np.dot(f_neighbors_previous, Q_history_vector)
+        A_new_row = 10 - H
+        F_new_row = np.insert(f_neighbors_current, i, f_self_current)
+        F[i,:] = F_new_row
+        A[i] = A_new_row
+    
+    Q[:, m] = np.linalg.solve(F, A)
+   
+    for x in range(inner_regime.shape[0]):
+         X, r_d = NearestCenterlinePoint(inner_regime[x])
+         T_inner[x,m] = T_0 - (Q[X, m] / (2*np.pi*k))*np.log(((inner_regime[x,0]) + 1e-12) / R)
+
+
+
+Q_nondim = Q / (10*k)
+t_nondim = np.sqrt(alpha * t)
+
+
+
+plt.figure()
+plt.loglog(t_nondim[1:], Q_nondim[mid,1:])
+plt.xlabel(r"non dimensionalized time")
+plt.xlim(1e-2, 1e1) 
+plt.ylim(0, 1e3)
+plt.ylabel(r"non dimensionalized heat flux")
+plt.grid(True, which="both")
+plt.show()
+
+midpoint_data = np.array([t_nondim[1:], Q_nondim[mid,1:]])
+
+df1 = pd.DataFrame({"Time": midpoint_data[0], "Heat Flux": midpoint_data[1]})
+
+
+if df1.columns[0].startswith("Unnamed"):
+    df1 = df1.drop(columns=df1.columns[0])
+
+
+df1 = df1.rename(columns={"Time": "t", "Heat Flux": "Q"})
+
+
+df1["t"] = pd.to_numeric(df1["t"], errors="coerce")
+df1["Q"] = pd.to_numeric(df1["Q"], errors="coerce")
+df1 = df1.dropna(subset=["t", "Q"])
+
+df_after = df1[df1["t"] >= 0.006]
+
+
+
+
+df2 = pd.read_csv('SBT_Beckers.csv', header= None, names=['t', 'Q'])
+
+df2_after = df2[(df2["t"] >= 0.006) &(df2['t'] <= 10)]
+
+
+
+ax = df_after.plot.scatter(x='t', y='Q', label = "Datla", legend=True)
+df2_after.plot(x = 't', y = 'Q', ax = ax, label = "Beckers", legend=True)
+ax.set_xscale('log')   
+ax.set_yscale('log')
+ax.set_xlabel('t')
+ax.set_ylabel('Q')
+plt.ylabel(r"non dimensionalized heat flux")
+plt.xlabel(r"non dimensionalized time")
+plt.title(f"Raw Data Datla vs Beckers Heat Flux vs Time Log Scale")
+plt.show()
+
+a_raw = df_after.sort_values("t")[["t","Q"]].copy()
+b_raw = df2_after.sort_values("t")[["t","Q"]].copy()
+
+t_min = max(a_raw["t"].min(), b_raw["t"].min())
+t_max = min(a_raw["t"].max(), b_raw["t"].max())
+
+a_raw = a_raw[(a_raw["t"] >= t_min) & (a_raw["t"] <= t_max)]
+b_raw = b_raw[(b_raw["t"] >= t_min) & (b_raw["t"] <= t_max)]
+
+Q_datla_on_b = np.interp(b_raw["t"].to_numpy(), a_raw["t"].to_numpy(), a_raw["Q"].to_numpy())
+Q_beckers = b_raw["Q"].to_numpy()
+
+diff_raw = Q_beckers - Q_datla_on_b
+mae_raw  = np.mean(np.abs(diff_raw))
+rmse_raw = np.sqrt(np.mean(diff_raw**2))
+
+fig, ax = plt.subplots(figsize=(10, 6))
+
+ax.loglog(a_raw["t"], a_raw["Q"], label="Datla raw")
+ax.loglog(b_raw["t"], b_raw["Q"], label="Beckers raw")
+
+ax.set_xlabel("non dimensional time")
+ax.set_ylabel("non dimensional heat flux")
+ax.set_title("Raw Data Datla vs Beckers (Log-Log)")
+ax.legend()
+ax.grid(True, which="both", alpha=0.3)
+
+ax.text(
+    0.02, 0.02,
+    f"RMSE = {rmse_raw:.4g}\nMAE  = {mae_raw:.4g}",
+    transform=ax.transAxes,
+    va="bottom", ha="left",
+    bbox=dict(boxstyle="round", facecolor="white", alpha=0.8)
+)
+
+plt.show()
+
+
+def exp(x, A, B, C, D, E, F, Z0):
+    return A*np.exp(-B*x) + C*np.exp(-D*x) + E*np.exp(-F*x) + Z0
+
+popt, pcov = curve_fit(exp, df_after['t'], df_after['Q'], sigma=df_after['Q'])
+a,b,c,d,e,f, Z0 = popt
+df_after.loc[:, 'Q_fitted'] = exp(df_after['t'], a,b,c,d,e,f, Z0)
+
+popt2, pcov2 = curve_fit(exp, df2_after['t'], df2_after['Q'], sigma=df2_after['Q'], maxfev=4000, p0=popt)
+g,h,i_,j_,k_,l_, X0 = popt2
+df2_after.loc[:, 'Q_fitted'] = exp(df2_after['t'], g,h,i_,j_,k_,l_, X0)
+
+DatlaFitCoefficients = np.array(popt)
+
+popt2, pcov2 = curve_fit(exp, df2_after['t'], df2_after['Q'], sigma = df2_after['Q'], maxfev = 4000, p0=[popt])
+
+g,h,i,j,k,l, X0 = popt2
+df2_after['Q_fitted'] = exp(df2_after['t'], g, h,i,j,k,l, X0)
+Becker_RMSE =  '%.3f'%np.sqrt(np.mean((df2_after['Q'] - df2_after['Q_fitted'])**2))
+plt.figure(figsize=(10, 6))
+plt.scatter(df2_after['t'], df2_after['Q'], label='Original Data')
+# plt.xscale('log')
+# plt.yscale('log')
+plt.plot(df2_after['t'], df2_after['Q_fitted'], 'r-', label=f'Fitted Function: y = {g:.2f} * exp({-h:.2f} * x) + {i:.2f} * exp({-j:.2f} * x) + {k:.2f} * exp({-l:.2f} * x) + {X0:.2f}, RMSE = {Becker_RMSE} W')
+plt.legend()
+plt.xlabel("nondim. time")
+plt.ylabel("nondim. heat flux ")
+plt.title("Fitted Curve for Becker's's Heat Flux vs Time")
+plt.show()
+
+
+
+BeckersFitCoefficients = np.array(popt2)
+
+
+
+fit_t = np.linspace(1e-2, 10, 150)
+DatlaPlot = exp(fit_t, a,b,c,d,e,f, Z0)
+BeckerPlot = exp(fit_t, g,h,i,j,k,l, X0)
+
+plt.loglog(fit_t, DatlaPlot, label = "Datla")
+plt.loglog(fit_t, BeckerPlot, label = "Becker")
+plt.xlabel("nondim. time")
+plt.ylabel("nondim. heat flux ")
+plt.title("Fitted Curves for Datla vs Becker at Log Scale")
+plt.show()
+
+
+fig, ax = plt.subplots(figsize=(10, 6))
+
+ax.plot(df_after["t"],  df_after["Q"],        label="Datla raw")
+ax.plot(df2_after["t"], df2_after["Q"],       label="Beckers raw")
+ax.plot(df_after["t"],  df_after["Q_fitted"], label="Datla fit")
+ax.plot(df2_after["t"], df2_after["Q_fitted"],label="Beckers fit")
+
+ax.set_xscale("log")
+ax.set_yscale("log")
+ax.set_xlabel("non dimensional time")
+ax.set_ylabel("non dimensional heat flux")
+ax.set_title("Datla vs Beckers: Raw + Fits (Overlay)")
+ax.legend()
+plt.show()
+
+fit_t2 = np.logspace(-2, 9, 5000)
+DatlaPlotLongTerm = exp(fit_t2, a,b,c,d,e,f, Z0)
+BeckerPlotLongTerm = exp(fit_t2, g,h,i,j,k,l, X0)
+plt.loglog(fit_t2, DatlaPlotLongTerm, label = "Datla")
+plt.loglog(fit_t2, BeckerPlotLongTerm, label = "Becker" )
+plt.xlabel('non dim. time')
+plt.ylabel('non dim. heat flux')
+plt.title('Long term behavior of Fitted Curves ')
+plt.show()
+
+
+mae_longterm  = np.mean(np.abs(BeckerPlotLongTerm - DatlaPlotLongTerm))
+rmse_longterm = np.sqrt(np.mean((BeckerPlotLongTerm - DatlaPlotLongTerm)**2))
+
+print("MAE:", mae_longterm)
+print("RMSE:", rmse_longterm)
+
+ax.text(
+    0.02, 0.02,
+    f"RMSE = {rmse_longterm:.4g} W \nMAE  = {mae_longterm:.4g}",
+    transform=ax.transAxes,
+    va="bottom", ha="left",
+    bbox=dict(boxstyle="round", facecolor="white", alpha=0.8)
+)
+
+
+abs_diff = np.abs(BeckerPlotLongTerm - DatlaPlotLongTerm)
+fig, ax = plt.subplots(figsize=(10, 6))
+ax.loglog(fit_t2, abs_diff, label="|Becker - Datla|")
+
+ax.set_xlabel("non dim. time")
+ax.set_ylabel("magnitude difference in heat flux")
+ax.set_title("Magnitude difference between fitted curves")
+ax.legend()
+ax.grid(True, which="both", alpha=0.3)
+
+ax.text(
+    0.02, 0.02,
+    f"RMSE = {rmse_longterm:.4g}\nMAE  = {mae_longterm:.4g}",
+    transform=ax.transAxes,
+    va="bottom", ha="left",
+    bbox=dict(boxstyle="round", facecolor="white", alpha=0.8)
+)
+
+plt.show()
+
+
+from matplotlib.animation import FuncAnimation
+
+r_in = inner_regime[:, 0]
+th_in = inner_regime[:, 1]
+z_in = inner_regime[:, 2]
+
+x_in = r_in * np.cos(th_in)
+y_in = r_in * np.sin(th_in)
+
+x_c = np.zeros_like(mesh_points)
+y_c = np.zeros_like(mesh_points)
+z_c = mesh_points
+Xg = r * np.cos(theta)
+Yg = r * np.sin(theta)
+Zg = z
+
+step = 2
+Xg_s = Xg[::step, ::step, ::step].ravel()
+Yg_s = Yg[::step, ::step, ::step].ravel()
+Zg_s = Zg[::step, ::step, ::step].ravel()
+
+
+frames = range(0, len(t))  
+
+fig = plt.figure()
+ax = fig.add_subplot(111, projection="3d")
+
+
+mesh_sc = ax.scatter(Xg_s, Yg_s, Zg_s, s=2, alpha=0.05)
+
+
+ax.plot(x_c, y_c, z_c, linewidth=3)
+
+m0 = 0
+T0 = T_inner[:, m0]
+
+inner_sc = ax.scatter(x_in, y_in, z_in, c=T0, s=18)
+
+cbar = fig.colorbar(inner_sc, ax=ax, pad=0.1)
+cbar.set_label("Temperature T")
+
+
+ax.set_xlabel("x")
+ax.set_ylabel("y")
+ax.set_zlabel("z")
+
+ax.set_xlim(Xg_s.min(), Xg_s.max())
+ax.set_ylim(Yg_s.min(), Yg_s.max())
+ax.set_zlim(Zg_s.min(), Zg_s.max())
+
+title = ax.set_title("")
+
+def update(m):
+    Tm = T_inner[:, m]
+    inner_sc.set_array(Tm)  
+
+    inner_sc.set_clim(T_inner.min(), T_inner.max())
+
+    title.set_text(f"Temperature on inner-regime points | m={m} | t={t[m]:.2e}")
+    return inner_sc, title
+
+ani = FuncAnimation(fig, update, frames=frames, interval=60, blit=False)
+plt.show()
+
+print("Q(mid) first 10:", Q[mid,:10])
+
+t_year = 365*24*3600  
+m_year = np.argmin(np.abs(t - t_year))
+print("closest t =", t[m_year], "index m =", m_year)
+
+m_plot = m_year
+
+r_in = inner_regime[:,0]
+th_in = inner_regime[:,1]
+z_in = inner_regime[:,2]
+T = T_inner[:, m_plot]
+
+
+dth = 0.10  
+mask_theta = (th_in < dth) | (th_in > (2*np.pi - dth))
+
+r_s = r_in[mask_theta]
+z_s = z_in[mask_theta]
+T_s = T[mask_theta]
+
+plt.figure(figsize=(9,5))
+scat = plt.scatter(z_s, r_s, c=T_s, s=12) 
+plt.axhline(R, linewidth=2)              
+plt.xlabel("z (axial)")
+plt.ylabel("r (radial)")
+plt.title(f"Side profile slice (θ≈0) at t={t[m_plot]:.3e} s")
+plt.colorbar(scat, label="Temperature")
+plt.show()

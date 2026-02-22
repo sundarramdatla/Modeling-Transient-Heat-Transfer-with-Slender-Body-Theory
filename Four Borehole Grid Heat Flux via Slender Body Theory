@@ -1,0 +1,910 @@
+import numpy as np
+import matplotlib.pyplot as plt
+import scipy.special as sc
+import scipy.integrate as integrate
+import pandas as pd
+from scipy.optimize import curve_fit
+from tqdm import tqdm
+
+
+#None of these values changed here from the 2 cylinder SBT set up
+
+k = 1
+alpha = 1e-6
+t = np.logspace(2, 9, 150)
+R = 0.05
+N_points = 10
+L = 10 / N_points
+mesh_points = (np.arange(N_points)+ 0.5) * L
+T_0 = 10
+N_cyl = 4
+midpoint = mesh_points[N_points//2]
+Q = np.zeros((N_cyl*mesh_points.size, t.size))
+N_fls = 10
+pc_p = k / alpha
+d = 1
+
+mid = N_points//2
+end = N_points -1
+
+
+
+
+
+print(mesh_points)
+e_inner = 1
+centerline = np.zeros((mesh_points.size, 3))  # A cylinder
+centerline[:, 2] = mesh_points
+center_z = centerline[:, 2]
+
+s = 1  #Distance of 
+b = 1  
+centerline2 = np.zeros((mesh_points.size, 3))  # B cylinder 
+centerline2[:,2] = mesh_points
+centerline2[:,0] = b
+center2_z = centerline2[:,2]
+
+q = 1 #Distance of cylinder C from A and cylinder D from B, essentially length of one side of the rectangle
+        #Put to 1 to see square set up, put to infinity to see that heat flux reduces to 2 cases of 2-cylinder heat flux
+
+centerline3 = np.zeros((mesh_points.size, 3))  # C cylinder
+centerline3[:,2] = mesh_points
+centerline3[:,0] = q
+centerline3[:,1] = np.pi/2
+center3_z = centerline3[:,2]
+
+centerline4 = np.zeros((mesh_points.size, 3))  # D cylinder
+centerline4[:,2] = mesh_points
+centerline4[:,0] = np.sqrt(q+s)
+centerline4[:,1] = np.pi/4
+center4_z = centerline4[:,2]
+
+
+
+
+def Discretize(j):
+    z0 = j * L
+    z1 = (j+1) * L
+    dz = (z1 - z0) / N_fls
+    z = z0 + (np.arange(N_fls) + 0.5) * dz
+    return z, dz
+
+
+
+
+
+def SelectedPipeCurrentPulseDecisionTree(R_CP, L_CP): #f_i_i_m_m entry
+    if R_CP > 70:
+        if L_CP < .05:
+            a = 1/(4*R_CP)
+            decision_taken = "ILS"
+            return (1/(4*np.pi*k)* sc.exp1(a)), decision_taken #ILS
+        elif L_CP >= 0.05: 
+            decision_taken = "FLS"
+            a = 1/(4*R_CP)
+            b = 1/(4*L_CP)
+            integral_val, integral_err = integrate.quad(lambda x: (1/x)*sc.erfc(1/2 * np.sqrt(x)),b, np.inf)
+            return (1/(4*np.pi*k) * sc.exp1(a)) - (1/(4*np.pi*k)* integral_val), decision_taken  #FLS
+    elif R_CP <= 70:
+        if L_CP < 0.03:
+            decision_taken = "ICS"
+            integral_val, integral_err = integrate.quad(lambda x: (1-np.exp(-x**2 *R_CP))/(x**3 *(sc.j1(x)**2 + sc.y1(x)**2)), 0, np.inf, limit = 800, epsabs = 1e-12, epsrel=1e-12)
+            return (2/(np.pi**3 * k) * integral_val ), decision_taken #ICS
+        elif L_CP >= .03:
+            decision_taken = "FCS"
+            b = 1/(4*L_CP)
+            integral_val, integral_err = integrate.quad(lambda x: (1-np.exp(-x**2 *R_CP))/(x**3 *(sc.j1(x)**2 + sc.y1(x)**2)), 0, np.inf, limit = 800, epsabs = 1e-12, epsrel=1e-12)
+            integral_val2, integral_err2 = integrate.quad(lambda x: (1/x)*sc.erfc(1/2 * np.sqrt(x)),b, np.inf)
+            return (2/(np.pi**3 * k) * integral_val - (1/(4*np.pi*k)) * integral_val2), decision_taken #FCS
+    
+def SelectedPipePreviousPulseDecisionTree(m, L):
+    decision = ""
+    f = np.zeros(m-1)
+    p = 0
+    for n in range(1, m):
+
+        RPPS = alpha*(t[m] - t[n-1]) / R_j**2
+        LPPS = alpha * (t[m] - t[n-1]) / L**2
+        SLR = 0
+        SPPS = 0.04
+        
+    
+        RPPE = alpha*(t[m] - t[n]) / R_j**2 
+        LPPE = alpha*(t[m] - t[n]) / L**2
+        SPPE = 100
+        
+        TDR = (t[m] - t[n]) / (t[n] - t[n-1])
+
+        if LPPE > 10:
+            if TDR > 7:
+                decision = "PS3"
+                f_i_i_m_n = L/(8*np.pi*k*TDR*np.sqrt(alpha*np.pi*(t[m] - t[n]))) #PS3
+            elif TDR <= 7:
+                decision = "PS2"
+                f_i_i_m_n = L/(4*np.pi*k*np.sqrt(alpha*np.pi)) * (1/np.sqrt((t[m] - t[n])) - 1/np.sqrt((t[m] - t[n-1]))) #PS2
+        elif LPPE <= 10:
+            if RPPE > 1000:
+                if LPPS < 0.02:
+                        decision = "ILS"
+                        a = 1/(4*RPPS)
+                        b = 1/(4*RPPE)
+                        f_i_i_m_n = 1 / (4*np.pi*k) * (sc.exp1(a) - sc.exp1(b)) #ILS
+                elif LPPS >= 0.02:
+                        decision = "FLS"
+                        a = 1/(4*RPPS)
+                        b = 1/(4*RPPE)
+                        c = 1/(4*LPPS)
+                        d = 1/(4*LPPE)
+                        integral_val, integral_err = integrate.quad(lambda x: (1/x) * sc.erfc(1/2 * np.sqrt(x)), c, d)
+                        f_i_i_m_n = 1 / (4*np.pi*k) * (sc.exp1(a) - sc.exp1(b) - integral_val) #FLS
+            elif RPPE <= 1000:
+                if LPPS < 0.01:
+                    decision = "ICS"
+                    integral_val2, integral_err2 = integrate.quad(
+    lambda x: (np.exp(-x**2 * RPPE) - np.exp(-x**2 * RPPS)) / (x**3 * (sc.j1(x)**2 + sc.y1(x)**2)),
+    0, np.inf       #ICS
+)
+                    f_i_i_m_n = 2/(np.pi**3 * k) * integral_val2
+                elif LPPS >= 0.01:
+                    decision = "FCS"
+                    c = 1/(4*LPPS)
+                    d = 1/(4*LPPE)
+                    integral_val3, integral_err3 = integrate.quad(
+                    lambda x: (np.exp(-x**2 * RPPE) - np.exp(-x**2 * RPPS)) / (x**3 * (sc.j1(x)**2 + sc.y1(x)**2)), 0, np.inf)
+                    integral_val, integral_err = integrate.quad(lambda x: (1/x) * sc.erfc(1/2 * np.sqrt(x)), c, d)
+                    f_i_i_m_n = 2/(np.pi**3*k) * integral_val3 - 1/(4*np.pi*k) * integral_val
+        
+        f[p] = f_i_i_m_n
+        p += 1
+    return f, decision     
+
+def NeighboringPipesPreviousPulseDecisionTree(L, m, i):
+
+    f_i_j_m_n = 0
+    decision = ""
+    f = np.zeros((mesh_points.size - 1)*(m-1))
+    p = 0
+
+    for j in range(mesh_points.size):
+
+        if j != i:
+
+            for n in range (1, m):
+                 
+                RPPS = alpha*(t[m] - t[n-1]) / R_j**2
+                LPPS = alpha * (t[m] - t[n-1]) / L**2
+                # S_ij = 1
+                S_ij = np.abs(j - i) * L
+                SLR = S_ij/L
+                S_CP = (alpha * (t[m] - t[m-1])) / S_ij ** 2
+                # SLR = 0
+                # SPPS = 0.04
+                SPPS = (alpha * (t[m] - t[n-1])) / S_ij **2
+                RPPE = alpha*(t[m] - t[n]) / R_j**2 
+                LPPE = alpha*(t[m] - t[n]) / L**2
+                # SPPE = 100
+                SPPE = (alpha * (t[m] - t[n])) / S_ij ** 2
+                TDR = (t[m] - t[n]) / (t[n] - t[n-1])
+
+                if SPPS < 0.04:
+                    f_i_j_m_n = 0
+                elif SPPS >= 0.04:
+                    if SLR > 4:
+                        if SPPE > 4:
+                            if TDR > 7:
+                                decision = "PS3"
+                                f_i_j_m_n = L/(8*np.pi*k*TDR*np.sqrt(alpha*np.pi*(t[m] - t[n]))) #PS3
+                        
+                            elif TDR <= 7:
+                                decision = "PS2"
+                                f_i_j_m_n = L/(4*np.pi*k*np.sqrt(alpha*np.pi)) * (1/ np.sqrt((t[m] - t[n])) - 1/np.sqrt((t[m] - t[n-1]))) #PS2
+                                        
+                        elif SPPE <= 4:
+                            decision = "PS1"
+                            f_i_j_m_n = 1/ (4*np.pi*k*SLR) * (sc.erfc(1/(2*np.sqrt(SPPS))) - sc.erfc(1/(2*np.sqrt(SPPE)))) #PS1
+                                              
+                    elif SLR <= 4:
+                        if (SLR > 2 and SPPE > 0.2):
+                            if SPPE > 4:
+                                if TDR > 7:
+                                    decision = "PS3"
+                                    f_i_j_m_n = L/(8*np.pi*k*TDR*np.sqrt(alpha*np.pi*(t[m] - t[n]))) #PS3
+                                    
+                                
+                                if TDR <= 7:
+                                    decision = "PS2"
+                                    f_i_j_m_n = L/(4*np.pi*k*np.sqrt(alpha*np.pi)) * (1/ np.sqrt((t[m] - t[n])) - 1/np.sqrt((t[m] - t[n-1])))          #PS2
+                                   
+                            elif SPPE <= 4:
+                                decision = "PS1"
+                                f_i_j_m_n = 1/ (4*np.pi*k*SLR) * (sc.erfc(1/(2*np.sqrt(SPPS))) - sc.erfc(1/(2*np.sqrt(SPPE))))   
+                                                  #PS1
+                        elif SLR <= 2 or SPPE <= 0.2:
+                            if SLR > 0.1 and SPPE > 100:
+                                if SPPE > 4:
+                                    if TDR > 7:
+                                        decision = "PS3"
+                                        f_i_j_m_n = L/(8*np.pi*k*TDR*np.sqrt(alpha*np.pi*(t[m] - t[n]))) #PS3
+                                       
+                                      
+                                    if TDR <= 7:
+                                        decision = "PS2"
+                                        f_i_j_m_n = L/(4*np.pi*k*np.sqrt(alpha*np.pi)) * (1/ np.sqrt((t[m] - t[n])) - 1/np.sqrt((t[m] - t[n-1])))          #PS2
+                                       
+                                elif SPPE <= 4:
+                                    decision = "PS1"
+                                    f_i_j_m_n = 1/ (4*np.pi*k*SLR) * (sc.erfc(1/(2*np.sqrt(SPPS))) - sc.erfc(1/(2*np.sqrt(SPPE))))
+                                                      #PS1
+                            elif SLR <= 0.1 or SPPE <= 100:
+                                decision = "FLS"
+                                f_i_j_m_n = 0
+                                z, dz = Discretize(j)
+                                for zp in z:
+                                    r = np.sqrt(R**2 + (mesh_points[i]- zp)**2)
+                                    f_i_j_m_n += (1/r) * (sc.erfc(r/(np.sqrt(4*alpha*(t[m] - t[n-1])))) - sc.erfc(r/(np.sqrt(4*alpha*(t[m] - t[n]))))) * dz
+                                f_i_j_m_n = (1/(4*np.pi*k)) * f_i_j_m_n
+                f[p] = f_i_j_m_n
+                p +=1
+                
+        elif j == i:
+            continue
+    return f, decision
+
+def NeighboringPipeCurrentPulseDecisionTree(i, m):
+    f = np.zeros(mesh_points.size - 1)
+    p = 0
+    decision = ""
+
+    for j in range(mesh_points.size):
+        if j == i:
+            continue
+
+        S_ij = abs(j - i) * L
+        # S_ij = 1
+        SLR = S_ij / L
+        S_CP = alpha * (t[m] - t[m-1]) / (S_ij**2)
+
+        if S_CP < 0.04:
+            decision = "PN"
+            f[p] = 0.0
+
+        else:
+            if SLR > 4:
+                if S_CP > 4:
+                    decision = "PS2"
+                    f[p] = (1/(4*np.pi*k*SLR)) * (1 - 1/np.sqrt(np.pi*S_CP))
+                else:
+                    decision = "PS1"
+                    f[p] = (1/(4*np.pi*k*SLR)) * sc.erfc(1/(2*np.sqrt(S_CP)))
+
+            else:  
+                if (SLR > 2) and (S_CP > 0.2):
+                    decision = "PS1"
+                    f[p] = (1/(4*np.pi*k*SLR)) * sc.erfc(1/(2*np.sqrt(S_CP)))
+                else:
+                   
+                    decision = "FLS"
+                    zseg, dzseg = Discretize(j)
+                    acc = 0.0
+                    for zp in zseg:
+                        rr = np.sqrt(R**2 + (mesh_points[i] - zp)**2)
+                        acc += (1/rr) * sc.erfc(rr / np.sqrt(4*alpha*(t[m] - t[m-1]))) * dzseg
+                    f[p] = (1/(4*np.pi*k)) * acc
+
+        p += 1
+
+    return f, decision
+
+
+
+def CrossNeighboringPipesPreviousPulseDecisionTree1(L, m, i):
+
+    f_i_j_m_n = 0
+    decision = ""
+    f = np.zeros((mesh_points.size)*(m-1))
+    p = 0
+
+    for j in range(mesh_points.size):
+
+
+            for n in range (1, m):
+                 
+                RPPS = alpha*(t[m] - t[n-1]) / R_j**2
+                LPPS = alpha * (t[m] - t[n-1]) / L**2
+                # S_ij = 1
+                S_ij = np.sqrt((b*d)**2+(center_z[i] - center2_z[j])**2)
+                SLR = S_ij/L
+                S_CP = (alpha * (t[m] - t[m-1])) / S_ij ** 2
+                # SLR = 0
+                # SPPS = 0.04
+                SPPS = (alpha * (t[m] - t[n-1])) / S_ij **2
+                RPPE = alpha*(t[m] - t[n]) / R_j**2 
+                LPPE = alpha*(t[m] - t[n]) / L**2
+                # SPPE = 100
+                SPPE = (alpha * (t[m] - t[n])) / S_ij ** 2
+                TDR = (t[m] - t[n]) / (t[n] - t[n-1])
+
+                if SPPS < 0.04:
+                    f_i_j_m_n = 0
+                elif SPPS >= 0.04:
+                    if SLR > 4:
+                        if SPPE > 4:
+                            if TDR > 7:
+                                decision = "PS3"
+                                f_i_j_m_n = L/(8*np.pi*k*TDR*np.sqrt(alpha*np.pi*(t[m] - t[n]))) #PS3
+                        
+                            elif TDR <= 7:
+                                decision = "PS2"
+                                f_i_j_m_n = L/(4*np.pi*k*np.sqrt(alpha*np.pi)) * (1/ np.sqrt((t[m] - t[n])) - 1/np.sqrt((t[m] - t[n-1]))) #PS2
+                                        
+                        elif SPPE <= 4:
+                            decision = "PS1"
+                            f_i_j_m_n = 1/ (4*np.pi*k*SLR) * (sc.erfc(1/(2*np.sqrt(SPPS))) - sc.erfc(1/(2*np.sqrt(SPPE)))) #PS1
+                                              
+                    elif SLR <= 4:
+                        if (SLR > 2 and SPPE > 0.2):
+                            if SPPE > 4:
+                                if TDR > 7:
+                                    decision = "PS3"
+                                    f_i_j_m_n = L/(8*np.pi*k*TDR*np.sqrt(alpha*np.pi*(t[m] - t[n]))) #PS3
+                                    
+                                
+                                if TDR <= 7:
+                                    decision = "PS2"
+                                    f_i_j_m_n = L/(4*np.pi*k*np.sqrt(alpha*np.pi)) * (1/ np.sqrt((t[m] - t[n])) - 1/np.sqrt((t[m] - t[n-1])))          #PS2
+                                   
+                            elif SPPE <= 4:
+                                decision = "PS1"
+                                f_i_j_m_n = 1/ (4*np.pi*k*SLR) * (sc.erfc(1/(2*np.sqrt(SPPS))) - sc.erfc(1/(2*np.sqrt(SPPE))))   
+                                                  #PS1
+                        elif SLR <= 2 or SPPE <= 0.2:
+                            if SLR > 0.1 and SPPE > 100:
+                                if SPPE > 4:
+                                    if TDR > 7:
+                                        decision = "PS3"
+                                        f_i_j_m_n = L/(8*np.pi*k*TDR*np.sqrt(alpha*np.pi*(t[m] - t[n]))) #PS3
+                                       
+                                      
+                                    if TDR <= 7:
+                                        decision = "PS2"
+                                        f_i_j_m_n = L/(4*np.pi*k*np.sqrt(alpha*np.pi)) * (1/ np.sqrt((t[m] - t[n])) - 1/np.sqrt((t[m] - t[n-1])))          #PS2
+                                       
+                                elif SPPE <= 4:
+                                    decision = "PS1"
+                                    f_i_j_m_n = 1/ (4*np.pi*k*SLR) * (sc.erfc(1/(2*np.sqrt(SPPS))) - sc.erfc(1/(2*np.sqrt(SPPE))))
+                                                      #PS1
+                            elif SLR <= 0.1 or SPPE <= 100:
+                                decision = "FLS"
+                                f_i_j_m_n = 0
+                                z, dz = Discretize(j)
+                                for zp in z:
+                                    r = np.sqrt((b*d)**2 + (center_z[i]- zp)**2)
+                                    f_i_j_m_n += (1/r) * (sc.erfc(r/(np.sqrt(4*alpha*(t[m] - t[n-1])))) - sc.erfc(r/(np.sqrt(4*alpha*(t[m] - t[n]))))) * dz
+                                f_i_j_m_n = (1/(4*np.pi*k)) * f_i_j_m_n
+                f[p] = f_i_j_m_n
+                p +=1
+                
+      
+    return f, decision
+
+
+def CrossNeighboringPipesPreviousPulseDecisionTree2(L, m, i):
+
+    f_i_j_m_n = 0
+    decision = ""
+    f = np.zeros((mesh_points.size)*(m-1))
+    p = 0
+
+    for j in range(mesh_points.size):
+
+
+            for n in range (1, m):
+                 
+                RPPS = alpha*(t[m] - t[n-1]) / R_j**2
+                LPPS = alpha * (t[m] - t[n-1]) / L**2
+                # S_ij = 1
+                S_ij = np.sqrt((np.sqrt(q+s)*d)**2 + (center_z[i] - center4_z[j])**2)
+                SLR = S_ij/L
+                S_CP = (alpha * (t[m] - t[m-1])) / S_ij ** 2
+                # SLR = 0
+                # SPPS = 0.04
+                SPPS = (alpha * (t[m] - t[n-1])) / S_ij **2
+                RPPE = alpha*(t[m] - t[n]) / R_j**2 
+                LPPE = alpha*(t[m] - t[n]) / L**2
+                # SPPE = 100
+                SPPE = (alpha * (t[m] - t[n])) / S_ij ** 2
+                TDR = (t[m] - t[n]) / (t[n] - t[n-1])
+
+                if SPPS < 0.04:
+                    f_i_j_m_n = 0
+                elif SPPS >= 0.04:
+                    if SLR > 4:
+                        if SPPE > 4:
+                            if TDR > 7:
+                                decision = "PS3"
+                                f_i_j_m_n = L/(8*np.pi*k*TDR*np.sqrt(alpha*np.pi*(t[m] - t[n]))) #PS3
+                        
+                            elif TDR <= 7:
+                                decision = "PS2"
+                                f_i_j_m_n = L/(4*np.pi*k*np.sqrt(alpha*np.pi)) * (1/ np.sqrt((t[m] - t[n])) - 1/np.sqrt((t[m] - t[n-1]))) #PS2
+                                        
+                        elif SPPE <= 4:
+                            decision = "PS1"
+                            f_i_j_m_n = 1/ (4*np.pi*k*SLR) * (sc.erfc(1/(2*np.sqrt(SPPS))) - sc.erfc(1/(2*np.sqrt(SPPE)))) #PS1
+                                              
+                    elif SLR <= 4:
+                        if (SLR > 2 and SPPE > 0.2):
+                            if SPPE > 4:
+                                if TDR > 7:
+                                    decision = "PS3"
+                                    f_i_j_m_n = L/(8*np.pi*k*TDR*np.sqrt(alpha*np.pi*(t[m] - t[n]))) #PS3
+                                    
+                                
+                                if TDR <= 7:
+                                    decision = "PS2"
+                                    f_i_j_m_n = L/(4*np.pi*k*np.sqrt(alpha*np.pi)) * (1/ np.sqrt((t[m] - t[n])) - 1/np.sqrt((t[m] - t[n-1])))          #PS2
+                                   
+                            elif SPPE <= 4:
+                                decision = "PS1"
+                                f_i_j_m_n = 1/ (4*np.pi*k*SLR) * (sc.erfc(1/(2*np.sqrt(SPPS))) - sc.erfc(1/(2*np.sqrt(SPPE))))   
+                                                  #PS1
+                        elif SLR <= 2 or SPPE <= 0.2:
+                            if SLR > 0.1 and SPPE > 100:
+                                if SPPE > 4:
+                                    if TDR > 7:
+                                        decision = "PS3"
+                                        f_i_j_m_n = L/(8*np.pi*k*TDR*np.sqrt(alpha*np.pi*(t[m] - t[n]))) #PS3
+                                       
+                                      
+                                    if TDR <= 7:
+                                        decision = "PS2"
+                                        f_i_j_m_n = L/(4*np.pi*k*np.sqrt(alpha*np.pi)) * (1/ np.sqrt((t[m] - t[n])) - 1/np.sqrt((t[m] - t[n-1])))          #PS2
+                                       
+                                elif SPPE <= 4:
+                                    decision = "PS1"
+                                    f_i_j_m_n = 1/ (4*np.pi*k*SLR) * (sc.erfc(1/(2*np.sqrt(SPPS))) - sc.erfc(1/(2*np.sqrt(SPPE))))
+                                                      #PS1
+                            elif SLR <= 0.1 or SPPE <= 100:
+                                decision = "FLS"
+                                f_i_j_m_n = 0
+                                z, dz = Discretize(j)
+                                for zp in z:
+                                    r = np.sqrt((np.sqrt(q+s)*d)**2 + (center_z[i]- zp)**2)
+                                    f_i_j_m_n += (1/r) * (sc.erfc(r/(np.sqrt(4*alpha*(t[m] - t[n-1])))) - sc.erfc(r/(np.sqrt(4*alpha*(t[m] - t[n]))))) * dz
+                                f_i_j_m_n = (1/(4*np.pi*k)) * f_i_j_m_n
+                f[p] = f_i_j_m_n
+                p +=1
+                
+      
+    return f, decision
+
+
+def CrossNeighboringPipesPreviousPulseDecisionTree3(L, m, i):
+
+    f_i_j_m_n = 0
+    decision = ""
+    f = np.zeros((mesh_points.size)*(m-1))
+    p = 0
+
+    for j in range(mesh_points.size):
+
+
+            for n in range (1, m):
+                 
+                RPPS = alpha*(t[m] - t[n-1]) / R_j**2
+                LPPS = alpha * (t[m] - t[n-1]) / L**2
+                # S_ij = 1
+                S_ij = np.sqrt((q*d)**2 + (center_z[i] - center4_z[j])**2)
+                SLR = S_ij/L
+                S_CP = (alpha * (t[m] - t[m-1])) / S_ij ** 2
+                # SLR = 0
+                # SPPS = 0.04
+                SPPS = (alpha * (t[m] - t[n-1])) / S_ij **2
+                RPPE = alpha*(t[m] - t[n]) / R_j**2 
+                LPPE = alpha*(t[m] - t[n]) / L**2
+                # SPPE = 100
+                SPPE = (alpha * (t[m] - t[n])) / S_ij ** 2
+                TDR = (t[m] - t[n]) / (t[n] - t[n-1])
+
+                if SPPS < 0.04:
+                    f_i_j_m_n = 0
+                elif SPPS >= 0.04:
+                    if SLR > 4:
+                        if SPPE > 4:
+                            if TDR > 7:
+                                decision = "PS3"
+                                f_i_j_m_n = L/(8*np.pi*k*TDR*np.sqrt(alpha*np.pi*(t[m] - t[n]))) #PS3
+                        
+                            elif TDR <= 7:
+                                decision = "PS2"
+                                f_i_j_m_n = L/(4*np.pi*k*np.sqrt(alpha*np.pi)) * (1/ np.sqrt((t[m] - t[n])) - 1/np.sqrt((t[m] - t[n-1]))) #PS2
+                                        
+                        elif SPPE <= 4:
+                            decision = "PS1"
+                            f_i_j_m_n = 1/ (4*np.pi*k*SLR) * (sc.erfc(1/(2*np.sqrt(SPPS))) - sc.erfc(1/(2*np.sqrt(SPPE)))) #PS1
+                                              
+                    elif SLR <= 4:
+                        if (SLR > 2 and SPPE > 0.2):
+                            if SPPE > 4:
+                                if TDR > 7:
+                                    decision = "PS3"
+                                    f_i_j_m_n = L/(8*np.pi*k*TDR*np.sqrt(alpha*np.pi*(t[m] - t[n]))) #PS3
+                                    
+                                
+                                if TDR <= 7:
+                                    decision = "PS2"
+                                    f_i_j_m_n = L/(4*np.pi*k*np.sqrt(alpha*np.pi)) * (1/ np.sqrt((t[m] - t[n])) - 1/np.sqrt((t[m] - t[n-1])))          #PS2
+                                   
+                            elif SPPE <= 4:
+                                decision = "PS1"
+                                f_i_j_m_n = 1/ (4*np.pi*k*SLR) * (sc.erfc(1/(2*np.sqrt(SPPS))) - sc.erfc(1/(2*np.sqrt(SPPE))))   
+                                                  #PS1
+                        elif SLR <= 2 or SPPE <= 0.2:
+                            if SLR > 0.1 and SPPE > 100:
+                                if SPPE > 4:
+                                    if TDR > 7:
+                                        decision = "PS3"
+                                        f_i_j_m_n = L/(8*np.pi*k*TDR*np.sqrt(alpha*np.pi*(t[m] - t[n]))) #PS3
+                                       
+                                      
+                                    if TDR <= 7:
+                                        decision = "PS2"
+                                        f_i_j_m_n = L/(4*np.pi*k*np.sqrt(alpha*np.pi)) * (1/ np.sqrt((t[m] - t[n])) - 1/np.sqrt((t[m] - t[n-1])))          #PS2
+                                       
+                                elif SPPE <= 4:
+                                    decision = "PS1"
+                                    f_i_j_m_n = 1/ (4*np.pi*k*SLR) * (sc.erfc(1/(2*np.sqrt(SPPS))) - sc.erfc(1/(2*np.sqrt(SPPE))))
+                                                      #PS1
+                            elif SLR <= 0.1 or SPPE <= 100:
+                                decision = "FLS"
+                                f_i_j_m_n = 0
+                                z, dz = Discretize(j)
+                                for zp in z:
+                                    r = np.sqrt((q*d)**2 + (center_z[i]- zp)**2)
+                                    f_i_j_m_n += (1/r) * (sc.erfc(r/(np.sqrt(4*alpha*(t[m] - t[n-1])))) - sc.erfc(r/(np.sqrt(4*alpha*(t[m] - t[n]))))) * dz
+                                f_i_j_m_n = (1/(4*np.pi*k)) * f_i_j_m_n
+                f[p] = f_i_j_m_n
+                p +=1
+                
+      
+    return f, decision
+
+
+
+def CrossNeighboringPipeCurrentPulseDecisionTree1(i, m):
+    f = np.zeros(mesh_points.size)
+    p = 0
+    decision = ""
+
+    for j in range(mesh_points.size):
+       
+
+        S_ij = np.sqrt((b)**2+(center_z[i]- center2_z[j])**2)
+        # S_ij = 1
+        SLR = S_ij / L
+        S_CP = alpha * (t[m] - t[m-1]) / (S_ij**2)
+
+        if S_CP < 0.04:
+            decision = "PN"
+            f[p] = 0.0
+
+        else:
+            if SLR > 4:
+                if S_CP > 4:
+                    decision = "PS2"
+                    f[p] = (1/(4*np.pi*k*SLR)) * (1 - 1/np.sqrt(np.pi*S_CP))
+                else:
+                    decision = "PS1"
+                    f[p] = (1/(4*np.pi*k*SLR)) * sc.erfc(1/(2*np.sqrt(S_CP)))
+
+            else:  
+                if (SLR > 2) and (S_CP > 0.2):
+                    decision = "PS1"
+                    f[p] = (1/(4*np.pi*k*SLR)) * sc.erfc(1/(2*np.sqrt(S_CP)))
+                else:
+                   
+                    decision = "FLS"
+                    zseg, dzseg = Discretize(j)
+                    acc = 0.0
+                    for zp in zseg:
+                        rr = np.sqrt((b)**2 + (center_z[i] - zp)**2) #May be problematic to have removed R, check later if errors occur
+                        acc += (1/rr) * sc.erfc(rr / np.sqrt(4*alpha*(t[m] - t[m-1]))) * dzseg
+                    f[p] = (1/(4*np.pi*k)) * acc
+
+        p += 1
+
+    return f, decision
+
+def CrossNeighboringPipeCurrentPulseDecisionTree2(i, m):
+    f = np.zeros(mesh_points.size)
+    p = 0
+    decision = ""
+
+    for j in range(mesh_points.size):
+       
+
+        S_ij = np.sqrt((np.sqrt(q+s)*d)**2+(center_z[i]- center4_z[j])**2)
+        # S_ij = 1
+        SLR = S_ij / L
+        S_CP = alpha * (t[m] - t[m-1]) / (S_ij**2)
+
+        if S_CP < 0.04:
+            decision = "PN"
+            f[p] = 0.0
+
+        else:
+            if SLR > 4:
+                if S_CP > 4:
+                    decision = "PS2"
+                    f[p] = (1/(4*np.pi*k*SLR)) * (1 - 1/np.sqrt(np.pi*S_CP))
+                else:
+                    decision = "PS1"
+                    f[p] = (1/(4*np.pi*k*SLR)) * sc.erfc(1/(2*np.sqrt(S_CP)))
+
+            else:  
+                if (SLR > 2) and (S_CP > 0.2):
+                    decision = "PS1"
+                    f[p] = (1/(4*np.pi*k*SLR)) * sc.erfc(1/(2*np.sqrt(S_CP)))
+                else:
+                   
+                    decision = "FLS"
+                    zseg, dzseg = Discretize(j)
+                    acc = 0.0
+                    for zp in zseg:
+                        rr = np.sqrt((np.sqrt(q+s)*d)**2 + (center_z[i] - zp)**2)
+                        acc += (1/rr) * sc.erfc(rr / np.sqrt(4*alpha*(t[m] - t[m-1]))) * dzseg
+                    f[p] = (1/(4*np.pi*k)) * acc
+
+        p += 1
+
+    return f, decision
+
+
+
+def CrossNeighboringPipeCurrentPulseDecisionTree3(i, m):
+    f = np.zeros(mesh_points.size)
+    p = 0
+    decision = ""
+
+    for j in range(mesh_points.size):
+       
+
+        S_ij = np.sqrt((q)**2+(center_z[i]- center2_z[j])**2)
+        # S_ij = 1
+        SLR = S_ij / L
+        S_CP = alpha * (t[m] - t[m-1]) / (S_ij**2)
+
+        if S_CP < 0.04:
+            decision = "PN"
+            f[p] = 0.0
+
+        else:
+            if SLR > 4:
+                if S_CP > 4:
+                    decision = "PS2"
+                    f[p] = (1/(4*np.pi*k*SLR)) * (1 - 1/np.sqrt(np.pi*S_CP))
+                else:
+                    decision = "PS1"
+                    f[p] = (1/(4*np.pi*k*SLR)) * sc.erfc(1/(2*np.sqrt(S_CP)))
+
+            else:  
+                if (SLR > 2) and (S_CP > 0.2):
+                    decision = "PS1"
+                    f[p] = (1/(4*np.pi*k*SLR)) * sc.erfc(1/(2*np.sqrt(S_CP)))
+                else:
+                   
+                    decision = "FLS"
+                    zseg, dzseg = Discretize(j)
+                    acc = 0.0
+                    for zp in zseg:
+                        rr = np.sqrt((q)**2 + (center_z[i] - zp)**2) #May be problematic to have removed R, check later if errors occur
+                        acc += (1/rr) * sc.erfc(rr / np.sqrt(4*alpha*(t[m] - t[m-1]))) * dzseg
+                    f[p] = (1/(4*np.pi*k)) * acc
+
+        p += 1
+
+    return f, decision
+
+        
+            
+    
+     
+
+
+
+
+
+
+def history_within(block_Q, i, m):
+    return np.delete(block_Q, i, axis=0)[:, 1:m].reshape(-1)
+
+def history_cross(other_block_Q, m):
+    return other_block_Q[:, 1:m].reshape(-1)
+
+
+
+
+F = np.zeros((N_cyl*mesh_points.size, N_cyl*mesh_points.size))
+A = np.zeros(N_cyl*mesh_points.size)
+debug_decision_array = np.full((mesh_points.size, t.size), '' ,dtype = "S3")
+
+
+for m in tqdm(range(1, len(t)), desc = "Computing Heat"):
+    F.fill(0.0)
+    A.fill(0.0)
+    F_edge_close = np.zeros((N_points, N_points))
+    F_diagonal = np.zeros((N_points, N_points))
+    F_edge_far = np.zeros((N_points, N_points))
+    decAB = np.empty(N_points, dtype='object')
+    decAD = np.empty(N_points, dtype='object')
+    decAC = np.empty(N_points, dtype='object')
+
+    for i in range(N_points):
+        F_edge_close[i,:], decAB[i] = CrossNeighboringPipeCurrentPulseDecisionTree1(i,m)
+        F_diagonal[i,:], decAD[i] = CrossNeighboringPipeCurrentPulseDecisionTree2(i,m)
+        F_edge_far[i,:], decAC[i] = CrossNeighboringPipeCurrentPulseDecisionTree3(i,m)
+    
+
+    F_edge_close_T = F_edge_close.T
+    F_diagonal_T = F_diagonal.T
+    F_edge_far_T = F_edge_far.T
+    
+    for i in range(mesh_points.size):
+
+
+        R_j = R
+        R_CP = (alpha*(t[m] - t[m-1])) / (R_j)**2  
+        L_CP = (alpha * (t[m] - t[m-1])) / L**2  
+      
+        f_self_current, decision = SelectedPipeCurrentPulseDecisionTree(R_CP,L_CP) 
+        f_self_previous, decision_previous = SelectedPipePreviousPulseDecisionTree(m, L) 
+        f_neighbors_current, decision_neighbor_current = NeighboringPipeCurrentPulseDecisionTree(i, m)
+
+        f_neighbors_previous, decision_neighbor_previous = NeighboringPipesPreviousPulseDecisionTree(L,m,i)
+        f_edge_close_prev,decision_cross_edge_close_prev = CrossNeighboringPipesPreviousPulseDecisionTree1(L, m, i) 
+        f_diag_prev, decision_cross_diag_prev = CrossNeighboringPipesPreviousPulseDecisionTree2(L,m,i)
+        f_edge_far_prev, decision_cross_edge_far_prev = CrossNeighboringPipesPreviousPulseDecisionTree3(L,m,i)
+        
+
+     
+
+        
+        F_new_row = np.insert(f_neighbors_current, i, f_self_current)
+       
+        F[i,0:N_points] = F_new_row    # for A cylinder
+        F[i, N_points: 2*N_points] = F_edge_close[i,:] 
+        F[i, 2*N_points:3*N_points] = F_edge_far[i,:]   
+        F[i, 3*N_points: 4*N_points] = F_diagonal[i,:]
+
+        F[N_points + i, 0:N_points] = F_edge_close_T[i,:]   #for B cylinder
+        F[N_points + i, N_points:2*N_points] = F_new_row  
+        F[N_points + i, 2*N_points: 3*N_points] = F_diagonal[i,:]
+        F[N_points + i, 3*N_points: 4*N_points] = F_edge_far[i,:]
+
+        F[2*N_points + i, 0:N_points] = F_edge_far_T[i,:]   # for C cylinder
+        F[2*N_points + i, N_points: 2*N_points] = F_diagonal_T[i,:]
+        F[2*N_points + i, 2*N_points: 3*N_points] = F_new_row
+        F[2*N_points + i, 3*N_points: 4*N_points] = F_edge_close[i,:]
+        
+        F[3*N_points + i, 0:N_points] = F_diagonal_T[i,:]    # for D cylinder
+        F[3*N_points + i, N_points: 2*N_points] = F_edge_far_T[i,:]
+        F[3*N_points + i, 2*N_points: 3*N_points] = F_edge_close_T[i,:]
+        F[3*N_points + i, 3*N_points: 4*N_points] = F_new_row
+
+
+        Q_A = Q[0:N_points, :]                 
+        Q_B = Q[N_points:2*N_points, :]
+        Q_C = Q[2*N_points: 3*N_points, :]
+        Q_D = Q[3*N_points:4*N_points,]       
+
+        Q_A_nei_prev = history_within(Q_A, i, m)    
+        Q_B_nei_prev = history_within(Q_B, i, m)
+        Q_C_nei_prev = history_within(Q_C, i, m)
+        Q_D_nei_prev = history_within(Q_D, i, m)      
+
+        Q_A_cross_prev = history_cross(Q_A, m)
+        Q_B_cross_prev = history_cross(Q_B, m)
+        Q_C_cross_prev = history_cross(Q_C,m)
+        Q_D_cross_prev = history_cross(Q_D, m)        
+        
+                
+
+        H_A = (np.dot(f_self_previous, Q_A[i, 1:m])
+            + np.dot(f_neighbors_previous, Q_A_nei_prev)
+            + np.dot(f_edge_close_prev, Q_B_cross_prev)
+            + np.dot(f_edge_far_prev, Q_C_cross_prev)
+            + np.dot(f_diag_prev, Q_D_cross_prev))
+
+        H_B = (np.dot(f_self_previous, Q_B[i, 1:m])
+            + np.dot(f_neighbors_previous, Q_B_nei_prev)
+            + np.dot(f_edge_close_prev, Q_A_cross_prev)
+            + np.dot(f_diag_prev, Q_C_cross_prev)
+            + np.dot(f_edge_far_prev, Q_D_cross_prev))
+
+        H_C = (np.dot(f_self_previous, Q_C[i, 1:m])
+        + np.dot(f_neighbors_previous, Q_C_nei_prev)
+        + np.dot(f_edge_far_prev, Q_A_cross_prev)
+        + np.dot(f_diag_prev, Q_B_cross_prev)
+        + np.dot(f_edge_close_prev, Q_D_cross_prev))
+
+        H_D = (np.dot(f_self_previous, Q_D[i, 1:m])
+        + np.dot(f_neighbors_previous, Q_D_nei_prev)
+        + np.dot(f_edge_far_prev, Q_B_cross_prev)
+        + np.dot(f_diag_prev, Q_A_cross_prev)
+        + np.dot(f_edge_close_prev, Q_C_cross_prev))
+
+        A[i] = 10 - H_A
+        A[N_points + i] = 10 - H_B
+        A[2*N_points + i] = 10 - H_C
+        A[3*N_points + i] = 10 - H_D
+
+        
+
+        
+    
+    Q[:, m] =  np.linalg.solve(F, A) 
+
+
+
+
+
+        
+
+
+Q_nondim = Q/(10 * k)
+t_nondim = np.sqrt(alpha*t) 
+
+
+
+
+
+csv_path = "TwoCylinderMidPoint.csv"
+
+df = pd.read_csv(csv_path, header=None, comment="#")
+
+
+if isinstance(df.iloc[0, 0], str) and not any(ch.isdigit() for ch in df.iloc[0, 0]):
+    df = df.iloc[1:].reset_index(drop=True)
+
+if df.shape[1] == 1:
+    xy = df.iloc[:, 0].astype(str).str.split(",", expand=True)
+    df = xy
+
+x_csv = pd.to_numeric(df.iloc[:, 0], errors="coerce").to_numpy()
+y_csv = pd.to_numeric(df.iloc[:, 1], errors="coerce").to_numpy()
+mask = np.isfinite(x_csv) & np.isfinite(y_csv)
+x_csv, y_csv = x_csv[mask], y_csv[mask]
+
+
+labels = ["A", "B", "C", "D"]
+
+fig, axes = plt.subplots(2, 2, figsize=(11, 8), sharex=True, sharey=True)
+axes = axes.flatten()
+
+for c in range(4):
+    idx = c * N_points + mid  
+
+   
+    axes[c].loglog(
+        t_nondim[1:],
+        Q_nondim[idx, 1:],
+        label=f"4-cylinder SBT (Cylinder {labels[c]} midpoint)"
+    )
+
+
+    axes[c].loglog(
+        x_csv,
+        y_csv,
+        marker="o",
+        linestyle="none",
+        label="2-cylinder SBT (CSV)"
+    )
+
+    axes[c].set_title(f"Cylinder {labels[c]} midpoint")
+    axes[c].set_xlabel(r"$\sqrt{\alpha t}$")
+    axes[c].set_ylabel(r"$q/(10k)$")
+    axes[c].grid(True, which="both")
+    axes[c].legend()
+
+plt.tight_layout()
+plt.show()

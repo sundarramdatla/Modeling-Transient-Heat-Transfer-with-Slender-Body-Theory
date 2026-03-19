@@ -1,0 +1,513 @@
+import numpy as np
+import matplotlib.pyplot as plt
+import scipy.special as sc
+import scipy.integrate as integrate
+import pandas as pd
+from scipy.optimize import curve_fit
+from tqdm import tqdm
+import warnings
+from scipy.integrate import IntegrationWarning
+from matplotlib.ticker import MaxNLocator
+
+
+#--Preprocessing--
+
+
+#Pipe parameters 
+L_t = 3.325  #Length of slinky in meters
+R_c = 0.37   #Radius of curvature
+R_j = 0.01  #Outer Pipe radius length in meters
+t_pipe = 0.001  #Thickness of pipe in meters
+k_p = 1 #thermal conductivity of pipe
+crossover_distance = 0.005 #the distance of the gap between turns of the helix 
+N = 30 #Number of pipe elements of the slinky (spatial discretization)
+
+#Fluid parameters
+p = 1000  #density of fluid
+c = 4200 #specific heat of fluid
+T_in = 20   #constant inlet temperature in Celsius
+U = 0.1  #bulk fluid flow in m/s 
+h = 1000  #constant h from newton's law of cooling
+
+#Medium parameters
+alpha = 1e-6  #Thermal diffusivity of medium
+k = 3  #thermal conductivity of medium
+T_m = 0 #initial medium temperature in Celsius
+
+#Time discretization in seconds
+t1 = np.linspace(0, 300, 100)  #Linear time steps for early times
+t2 = np.logspace(np.log10(300), 7, 150) #Logarithmic time steps for later times
+t = np.unique(np.concatenate([t1, t2]))  
+
+#Integration parameters for decision trees
+N_fls = 10 # This parameter is to approximate the FLS integral by summation, increasing this will lead to better approximations, but slower run times
+X_max = 50 # Ceiling for the integration to ensure convergence, increasing will lead to better approximations but slower run time
+
+
+#Slinky initialization via parametric equations for a 1 turn helix
+eta_nodes = np.linspace(0, L_t / np.sqrt(R_c**2 + (crossover_distance / (2 * np.pi))**2), N + 1)
+x_nodes = R_c * np.sin(eta_nodes)
+y_nodes = R_c * np.cos(eta_nodes)
+z_nodes = (crossover_distance / (2 * np.pi)) * eta_nodes
+nodes = np.column_stack((x_nodes, y_nodes, z_nodes))
+mesh_points = 0.5 * (nodes[:-1] + nodes[1:]) #Center-points of each pipe element along the slinky
+Npts = mesh_points.shape[0] 
+L = np.linalg.norm(nodes[1] - nodes[0]) #Length of one pipe element (dS)
+
+#Debugging functions + Integration assisting functions that improve convergence times and diagnose integration errors 
+
+def safe_quad_singular(func, X_max, label=""): # Function that improves convergence on integration and provides debugging output for integration errors and infinite values occur 
+    x1 = 1e-4
+    x2 = 1e-1
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always", IntegrationWarning)
+
+        I1, e1 = integrate.quad(func, 0, x1, points=[0], limit=300)
+        I2, e2 = integrate.quad(func, x1, x2, limit=300)
+        I3, e3 = integrate.quad(func, x2, X_max, limit=300)
+
+    total = I1 + I2 + I3
+
+    for w in caught:
+        if issubclass(w.category, IntegrationWarning):
+            print(f"\nIntegrationWarning in {label}")
+            print("warning message:", str(w.message))
+            print("I1, I2, I3 =", I1, I2, I3)
+            print("e1, e2, e3 =", e1, e2, e3)
+
+    if not np.isfinite(total):
+        print(f"\nBad integral in {label}")
+        print("I1, I2, I3 =", I1, I2, I3)
+        print("e1, e2, e3 =", e1, e2, e3)
+        raise ValueError(f"Non-finite integral in {label}")
+
+    return total
+
+
+def check_finite(name, arr, m=None, i=None, j=None, n=None): #Debugging function that can be called to check for infinite values 
+    arr = np.asarray(arr)
+    if not np.all(np.isfinite(arr)):
+        print(f"\nNon-finite detected in {name}")
+        if m is not None:
+            print("m =", m, "t =", t[m])
+        if i is not None:
+            print("i =", i)
+        if j is not None:
+            print("j =", j)
+        if n is not None:
+            print("n =", n)
+        print("shape =", arr.shape)
+        print("min =", np.nanmin(arr))
+        print("max =", np.nanmax(arr))
+        raise ValueError(f"Non-finite values in {name}")
+
+#Discretization function that is used to turn FLS integrals into summations along the pipe length
+def Discretize(j):  
+    p0 = nodes[j]
+    p1 = nodes[j + 1]
+    dp = (p1 - p0) / N_fls
+    ds = np.linalg.norm(dp)
+    s = np.arange(N_fls) + 0.5
+    pts = p0 + s[:, None] * dp[None, :]
+    return pts, ds
+
+#Decision Trees  for Slender Body Theory, used to build entries within the F matrix 
+
+def SelectedPipeCurrentPulseDecisionTree(R_CP, L_CP):
+    if R_CP > 70:
+        if L_CP < 0.05:
+            a = 1 / (4 * R_CP)
+            return (1 / (4 * np.pi * k) * sc.exp1(a)), "ILS"
+        else:
+            a = 1 / (4 * R_CP)
+            b = 1 / (4 * L_CP)
+            integral_val, _ = integrate.quad(
+                lambda x: (1 / x) * sc.erfc(0.5 * np.sqrt(x)),
+                b,
+                np.inf
+            )
+            return (
+                (1 / (4 * np.pi * k) * sc.exp1(a))
+                - (1 / (4 * np.pi * k) * integral_val),
+                "FLS"
+            )
+    else:
+        if L_CP < 0.03:
+            integral_val = safe_quad_singular(
+                lambda x: (-np.expm1(-x**2 * R_CP)) / (x**3 * (sc.j1(x)**2 + sc.y1(x)**2)),
+                X_max,
+                label=f"SelectedPipeCurrentPulseDecisionTree ICS at R_CP={R_CP}"
+            )
+            return (2 / (np.pi**3 * k) * integral_val), "ICS"
+        else:
+            b = 1 / (4 * L_CP)
+            integral_val = safe_quad_singular(
+                lambda x: (-np.expm1(-x**2 * R_CP)) / (x**3 * (sc.j1(x)**2 + sc.y1(x)**2)),
+                X_max,
+                label=f"SelectedPipeCurrentPulseDecisionTree FCS at R_CP={R_CP}"
+            )
+            integral_val2, _ = integrate.quad(
+                lambda x: (1 / x) * sc.erfc(0.5 * np.sqrt(x)),
+                b,
+                np.inf
+            )
+            return (
+                2 / (np.pi**3 * k) * integral_val
+                - (1 / (4 * np.pi * k)) * integral_val2,
+                "FCS"
+            )
+
+
+def SelectedPipePreviousPulseDecisionTree(m, Lseg):
+    decision = ""
+    f = np.zeros(m - 1)
+
+    for idx, n in enumerate(range(1, m)):
+        RPPS = alpha * (t[m] - t[n - 1]) / R_j**2
+        LPPS = alpha * (t[m] - t[n - 1]) / Lseg**2
+        RPPE = alpha * (t[m] - t[n]) / R_j**2
+        LPPE = alpha * (t[m] - t[n]) / Lseg**2
+        TDR = (t[m] - t[n]) / (t[n] - t[n - 1])
+
+        if LPPE > 10:
+            if TDR > 7:
+                decision = "PS3"
+                f_i_i_m_n = Lseg / (8 * np.pi * k * TDR * np.sqrt(alpha * np.pi * (t[m] - t[n])))
+            else:
+                decision = "PS2"
+                f_i_i_m_n = Lseg / (4 * np.pi * k * np.sqrt(alpha * np.pi)) * (
+                    1 / np.sqrt(t[m] - t[n]) - 1 / np.sqrt(t[m] - t[n - 1])
+                )
+        else:
+            if RPPE > 1000:
+                if LPPS < 0.02:
+                    decision = "ILS"
+                    a = 1 / (4 * RPPS)
+                    b = 1 / (4 * RPPE)
+                    f_i_i_m_n = 1 / (4 * np.pi * k) * (sc.exp1(a) - sc.exp1(b))
+                else:
+                    decision = "FLS"
+                    a = 1 / (4 * RPPS)
+                    b = 1 / (4 * RPPE)
+                    c = 1 / (4 * LPPS)
+                    d = 1 / (4 * LPPE)
+                    integral_val, _ = integrate.quad(
+                        lambda x: (1 / x) * sc.erfc(0.5 * np.sqrt(x)),
+                        c,
+                        d
+                    )
+                    f_i_i_m_n = 1 / (4 * np.pi * k) * (sc.exp1(a) - sc.exp1(b) - integral_val)
+            else:
+                if LPPS < 0.01:
+                    decision = "ICS"
+                    integral_val2, _ = integrate.quad(
+                        lambda x: (np.exp(-x**2 * RPPE) - np.exp(-x**2 * RPPS)) / (x**3 * (sc.j1(x)**2 + sc.y1(x)**2)),
+                        0,
+                        X_max,
+                        limit=200
+                    )
+                    f_i_i_m_n = 2 / (np.pi**3 * k) * integral_val2
+                else:
+                    decision = "FCS"
+                    c = 1 / (4 * LPPS)
+                    d = 1 / (4 * LPPE)
+                    integral_val3, _ = integrate.quad(
+                        lambda x: (np.exp(-x**2 * RPPE) - np.exp(-x**2 * RPPS)) / (x**3 * (sc.j1(x)**2 + sc.y1(x)**2)),
+                        0,
+                        X_max,
+                        limit=200
+                    )
+                    integral_val, _ = integrate.quad(
+                        lambda x: (1 / x) * sc.erfc(0.5 * np.sqrt(x)),
+                        c,
+                        d
+                    )
+                    f_i_i_m_n = 2 / (np.pi**3 * k) * integral_val3 - 1 / (4 * np.pi * k) * integral_val
+
+        f[idx] = f_i_i_m_n
+
+    return f, decision
+
+
+def NeighboringPipesPreviousPulseDecisionTree(Lseg, m, i):
+    f_i_j_m_n = 0
+    decision = ""
+    f = np.zeros((Npts - 1) * (m - 1))
+    p = 0
+
+    for j in range(Npts):
+        if j != i:
+            for n in range(1, m):
+                RPPS = alpha * (t[m] - t[n - 1]) / R_j**2
+                LPPS = alpha * (t[m] - t[n - 1]) / Lseg**2
+
+                S_ij = np.abs(j - i) * Lseg
+                SLR = S_ij / Lseg
+                S_CP = (alpha * (t[m] - t[m - 1])) / S_ij**2
+                SPPS = (alpha * (t[m] - t[n - 1])) / S_ij**2
+
+                RPPE = alpha * (t[m] - t[n]) / R_j**2
+                LPPE = alpha * (t[m] - t[n]) / Lseg**2
+                SPPE = (alpha * (t[m] - t[n])) / S_ij**2
+                TDR = (t[m] - t[n]) / (t[n] - t[n - 1])
+
+                if SPPS < 0.04:
+                    f_i_j_m_n = 0
+                elif SPPS >= 0.04:
+                    if SLR > 4:
+                        if SPPE > 4:
+                            if TDR > 7:
+                                decision = "PS3"
+                                f_i_j_m_n = Lseg / (8 * np.pi * k * TDR * np.sqrt(alpha * np.pi * (t[m] - t[n])))
+                            elif TDR <= 7:
+                                decision = "PS2"
+                                f_i_j_m_n = Lseg / (4 * np.pi * k * np.sqrt(alpha * np.pi)) * (
+                                    1 / np.sqrt(t[m] - t[n]) - 1 / np.sqrt(t[m] - t[n - 1])
+                                )
+                        elif SPPE <= 4:
+                            decision = "PS1"
+                            f_i_j_m_n = 1 / (4 * np.pi * k * SLR) * (
+                                sc.erfc(1 / (2 * np.sqrt(SPPS))) - sc.erfc(1 / (2 * np.sqrt(SPPE)))
+                            )
+
+                    elif SLR <= 4:
+                        if (SLR > 2 and SPPE > 0.2):
+                            if SPPE > 4:
+                                if TDR > 7:
+                                    decision = "PS3"
+                                    f_i_j_m_n = Lseg / (8 * np.pi * k * TDR * np.sqrt(alpha * np.pi * (t[m] - t[n])))
+                                if TDR <= 7:
+                                    decision = "PS2"
+                                    f_i_j_m_n = Lseg / (4 * np.pi * k * np.sqrt(alpha * np.pi)) * (
+                                        1 / np.sqrt(t[m] - t[n]) - 1 / np.sqrt(t[m] - t[n - 1])
+                                    )
+                            elif SPPE <= 4:
+                                decision = "PS1"
+                                f_i_j_m_n = 1 / (4 * np.pi * k * SLR) * (
+                                    sc.erfc(1 / (2 * np.sqrt(SPPS))) - sc.erfc(1 / (2 * np.sqrt(SPPE)))
+                                )
+
+                        elif SLR <= 2 or SPPE <= 0.2:
+                            if SLR > 0.1 and SPPE > 100:
+                                if SPPE > 4:
+                                    if TDR > 7:
+                                        decision = "PS3"
+                                        f_i_j_m_n = Lseg / (8 * np.pi * k * TDR * np.sqrt(alpha * np.pi * (t[m] - t[n])))
+                                    if TDR <= 7:
+                                        decision = "PS2"
+                                        f_i_j_m_n = Lseg / (4 * np.pi * k * np.sqrt(alpha * np.pi)) * (
+                                            1 / np.sqrt(t[m] - t[n]) - 1 / np.sqrt(t[m] - t[n - 1])
+                                        )
+                                elif SPPE <= 4:
+                                    decision = "PS1"
+                                    f_i_j_m_n = 1 / (4 * np.pi * k * SLR) * (
+                                        sc.erfc(1 / (2 * np.sqrt(SPPS))) - sc.erfc(1 / (2 * np.sqrt(SPPE)))
+                                    )
+                            elif SLR <= 0.1 or SPPE <= 100:
+                                decision = "FLS"
+                                f_i_j_m_n = 0
+                                z, dz = Discretize(j)
+                                for zp in z:
+                                    r = np.linalg.norm(mesh_points[i] - zp)
+                                    f_i_j_m_n += (
+                                        (1 / r)
+                                        * (
+                                            sc.erfc(r / (np.sqrt(4 * alpha * (t[m] - t[n - 1]))))
+                                            - sc.erfc(r / (np.sqrt(4 * alpha * (t[m] - t[n]))))
+                                        )
+                                        * dz
+                                    )
+                                f_i_j_m_n = (1 / (4 * np.pi * k)) * f_i_j_m_n
+
+                f[p] = f_i_j_m_n
+                p += 1
+
+        elif j == i:
+            continue
+
+    return f, decision
+
+
+def NeighboringPipeCurrentPulseDecisionTree(Lseg, i, m):
+    f = np.zeros(Npts - 1)
+    p = 0
+    decision = ""
+
+    for j in range(Npts):
+        if j == i:
+            continue
+
+        S_ij = abs(j - i) * Lseg
+        SLR = S_ij / Lseg
+        S_CP = alpha * (t[m] - t[m - 1]) / (S_ij**2)
+
+        if S_CP < 0.04:
+            decision = "PN"
+            f[p] = 0.0
+        else:
+            if SLR > 4:
+                if S_CP > 4:
+                    decision = "PS2"
+                    f[p] = (1 / (4 * np.pi * k * SLR)) * (1 - 1 / np.sqrt(np.pi * S_CP))
+                else:
+                    decision = "PS1"
+                    f[p] = (1 / (4 * np.pi * k * SLR)) * sc.erfc(1 / (2 * np.sqrt(S_CP)))
+            else:
+                if (SLR > 2) and (S_CP > 0.2):
+                    decision = "PS1"
+                    f[p] = (1 / (4 * np.pi * k * SLR)) * sc.erfc(1 / (2 * np.sqrt(S_CP)))
+                else:
+                    decision = "FLS"
+                    zseg, dzseg = Discretize(j)
+                    acc = 0.0
+                    for zp in zseg:
+                        rr = np.linalg.norm(mesh_points[i] - zp)
+                        acc += (1 / rr) * sc.erfc(rr / np.sqrt(4 * alpha * (t[m] - t[m - 1]))) * dzseg
+                    f[p] = (1 / (4 * np.pi * k)) * acc
+
+        p += 1
+
+    return f, decision
+
+ #Function that provides history terms of Q ( matrix tracking heat pulses at end of each time step m ) for calculating historical contributions of previous heat pulses
+ #Outputs a vector 
+def Q_history(Q, i, m):
+    Q_sub = Q[:, 1:m].copy()
+    Q_sub = np.delete(Q_sub, i, axis=0)
+    return Q_sub.reshape(-1)
+
+
+
+
+#Matrix-vector initialization
+Q = np.zeros((Npts, t.size))  #Q matrix storing heat pulses at end of time step m at centerpoint of each pipe element
+T = np.zeros((Npts, t.size))  #T matrix storing temperature of each pipe element
+T_f = np.zeros((Npts, t.size))  #T_f matrix storing fluid temperature at each pipe element
+T_f[0, :] = T_in   # Inlet fluid temperature held at constant temperature
+F = np.zeros((Npts, Npts))  #F matrix whose entries are Green's functions and calculated from the decision trees
+H_vec = np.zeros(Npts)  #History vector that contains contributions from historical heat pulses in the current time step m
+R_thermal = np.log(0.01 / 0.0099) / (2 * np.pi * k_p) + 1 / (2 * np.pi * h * 0.0099) #Total thermal resistance of conductive heat transfer through the pipe and convective heat transfer from fluid to pipe
+
+
+#-- SBT Algorithm -- 
+for m in tqdm(range(1, t.size), desc="Computing Heat"):
+    R_CP = alpha * (t[m] - t[m - 1]) / R_j**2           #Calculate Fourier numbers which are inputted into decision trees
+    L_CP = alpha * (t[m] - t[m - 1]) / L**2
+
+    f_self_current, decision = SelectedPipeCurrentPulseDecisionTree(R_CP, L_CP)
+    f_self_previous, decision_previous = SelectedPipePreviousPulseDecisionTree(m, L)
+
+    for i in range(Npts):
+        f_neighbors_current, decision_neighbor_current = NeighboringPipeCurrentPulseDecisionTree(L, i, m)
+        F_row = f_neighbors_current.copy()
+        F_row = np.insert(F_row, i, f_self_current)
+        F[i, :] = F_row
+
+    f_neighbors_previous_all = []
+    for i in range(Npts):
+        f_neighbors_previous, _ = NeighboringPipesPreviousPulseDecisionTree(L, m, i)
+        f_neighbors_previous_all.append(f_neighbors_previous)
+
+    H_vec = np.zeros(Npts)
+    for i in range(Npts):
+        Q_history_vector = Q_history(Q, i, m)
+        H_vec[i] = (
+            np.dot(f_self_previous, Q[i, 1:m])
+            + np.dot(f_neighbors_previous_all[i].reshape(-1), Q_history_vector)
+        )
+
+    #F matrix is now built
+    # SBT: Temperature at each pipe element T = FQ,
+    # Substitute T = FQ + H_vec into Q = T_f - T / R_thermal
+    #(RI + F)Q = T_f - H_vec, where I is the (N,N) identity matrix, inverting (RI + F) and solving for Q 
+
+    Tf_known = T_f[:, m - 1].copy()
+    Tf_known[0] = T_in
+    M = R_thermal * np.eye(Npts) + F
+    rhs = Tf_known - H_vec
+    Q[:, m] = np.linalg.solve(M, rhs)
+
+    T[:, m] = F @ Q[:, m] + H_vec
+
+
+    dt = t[m] - t[m - 1]
+    lam = U * dt / L
+
+    Tf_old = T_f[:, m - 1].copy()
+    Tf_old[0] = T_in
+    
+    #Updating fluid temperature T_f via backward Euler and upwind discretization of the 1D advection equation using the solved Q 
+
+    T_f[0, m] = T_in
+    for i in range(1, Npts):
+        source_i = -dt * Q[i, m] / (p * c * np.pi * (0.0099)**2)
+        T_f[i, m] = (Tf_old[i] + lam * T_f[i - 1, m] + source_i) / (1 + lam)
+
+
+#--Post processing--
+
+# --- Logarithmic comparison plot ---
+
+
+
+beckers = pd.read_csv("BeckersSlinky.csv", header=None)
+t_beck = beckers.iloc[:, 0].values
+T_beck = beckers.iloc[:, 1].values
+
+
+t_days = t / 86400
+t_beck_days = t_beck / 86400
+
+mask_log_sbt = t_days > 0
+mask_log_beck = t_beck_days > 0
+
+plt.figure(figsize=(8, 5))
+plt.plot(t_days[mask_log_sbt], T_f[-1, mask_log_sbt], label="SBT", linewidth=2)
+plt.plot(t_beck_days[mask_log_beck], T_beck[mask_log_beck], "ro", label="Becker", markersize=6)
+
+plt.xscale("log")
+plt.xlabel("Time (days)")
+plt.ylabel("Outlet Fluid Temperature (°C)")
+plt.title("Slinky Coil Outlet Temperature (Log Time Scale)")
+plt.grid(True, which="both")
+plt.legend()
+
+plt.show()
+
+plt.figure(figsize=(8, 5))
+plt.plot(t_days, T_f[-1, :], label="SBT", linewidth=2)
+plt.plot(t_beck_days, T_beck, "ro", label="Becker", markersize=6)
+
+plt.xlabel("Time (days)")
+plt.ylabel("Outlet Fluid Temperature (°C)")
+plt.title("Slinky Coil Outlet Temperature")
+
+plt.grid(True)
+plt.legend()
+plt.ticklabel_format(style='plain', axis='x')
+plt.xticks(np.linspace(0, max(t_days), 6))  
+
+plt.show()
+
+
+zoom_days = 6
+mask_sbt_zoom = t_days <= zoom_days
+mask_beck_zoom = t_beck_days <= zoom_days
+
+plt.figure(figsize=(8, 5))
+plt.plot(t_days[mask_sbt_zoom], T_f[-1, mask_sbt_zoom],
+         label="SBT", linewidth=2)
+
+plt.plot(t_beck_days[mask_beck_zoom], T_beck[mask_beck_zoom],
+         "ro", label="Becker", markersize=6)
+plt.xlabel("Time (days)")
+plt.ylabel("Outlet Fluid Temperature (°C)")
+plt.title(f"Transient Behavior (First {zoom_days} Days)")
+plt.grid(True)
+plt.legend()
+ax = plt.gca()
+ax.xaxis.set_major_locator(MaxNLocator(nbins=8))   
+ax.yaxis.set_major_locator(MaxNLocator(nbins=8))
+
+plt.show()

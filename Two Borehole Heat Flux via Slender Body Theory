@@ -7,72 +7,47 @@ from scipy.optimize import curve_fit
 from tqdm import tqdm
 
 
-#--Preprocessing--
 
-k = 1 #Thermal conductivity
-alpha = 1e-6 #Thermal diffusivity
-t = np.logspace(2, 9, 150) #Time from 10^2 to 10^9 seconds (30 years)
-R = 0.05 #Radius of cylinder
-N_points = 10 # Number of pipe elements per cylinder
-L = 10 / N_points #Pipe element length
-mesh_points = (np.arange(N_points)+ 0.5) * L #Mesh point coordinates
-T_0 = 10  #Cylinder is kept at constant 10C
-N_cyl = 4  #Number of cylinders
-midpoint = mesh_points[N_points//2] #Midpoint of cylinder index
-Q = np.zeros((N_cyl*mesh_points.size, t.size)) #Initialize heat flux matrix 
-N_fls = 10     #FLS integrals are converted into sums. N_fls is the number of summations. Higher N_fls means higher accuracy, slower computational time
-pc_p = k / alpha  #specific heat c_p = k/ (p * alpha)
-d = 1
 
-#Indexes
+k = 1       #Thermal conductivity
+alpha = 1e-6  #Thermal diffusivity
+t = np.logspace(2, 9, 150)    #Time of simulation, 10^2 to 10^9 seconds or approx. 30 years
+R = 0.05   #Radius of cylinder
+N_points = 10   #Number of pipe elements per cylinder
+L = 10 / N_points   # pipe element length
+mesh_points = (np.arange(N_points)+ 0.5) * L   #mesh point coordinates
+T_0 = 10  # Cylinder is kept at constant 10C  
+N_cyl = 2   #Number of cylinders
+midpoint = mesh_points[N_points//2]     
+Q = np.zeros((N_cyl*mesh_points.size, t.size))   #Initialize heat flux matrix Q
+N_fls = 10   
+pc_p = k / alpha  
+d = 1  #Distance between cylinders = 1m
+
 mid = N_points//2
 end = N_points -1
 
 
-
-#Grid set up of boreholes:  
-#             q 
-#    A ---------------C
-#    |                |
-#  b |                |  s
-#    |                |
-#    B ---------------D 
-#            q
-
-
-
-#Initializing borehole geometry for 4 boreholes
+print(mesh_points)
 e_inner = 1
-centerline = np.zeros((mesh_points.size, 3))  # A cylinder
+centerline = np.zeros((mesh_points.size, 3))   #Initialize cylinder A's centerline
 centerline[:, 2] = mesh_points
 center_z = centerline[:, 2]
 
-s = 1  #Distance of cylinder A to B
-b = 1  #Distance of cylinder C to D
-centerline2 = np.zeros((mesh_points.size, 3))  # B cylinder 
+centerline2 = np.zeros((mesh_points.size, 3))   #Initialize cylinder B's centerline
 centerline2[:,2] = mesh_points
-centerline2[:,0] = b
+centerline2[:,0] = 1
 center2_z = centerline2[:,2]
 
-q = 1e8 #Distance of cylinder C from A and cylinder D from B, essentially length of one side of the rectangle
-        #Put to 1 to see square set up, put to infinity to see that heat flux reduces to 2 cases of 2-cylinder heat flux
-
-centerline3 = np.zeros((mesh_points.size, 3))  # C cylinder
-centerline3[:,2] = mesh_points
-centerline3[:,0] = q
-centerline3[:,1] = np.pi/2
-center3_z = centerline3[:,2]
-
-centerline4 = np.zeros((mesh_points.size, 3))  # D cylinder
-centerline4[:,2] = mesh_points
-centerline4[:,0] = np.sqrt(q+s)
-centerline4[:,1] = np.pi/4
-center4_z = centerline4[:,2]
 
 
 
-#Function used for Finite Line Segment or 'FLS' calculation in decision trees
-def Discretize(j):
+
+
+
+
+
+def Discretize(j):  #Function used for Finite Line Segment or 'FLS' calculation in decision trees
     z0 = j * L
     z1 = (j+1) * L
     dz = (z1 - z0) / N_fls
@@ -81,9 +56,7 @@ def Discretize(j):
 
 
 
-
-
-def SelectedPipeCurrentPulseDecisionTree(R_CP, L_CP): #f_i_i_m_m decision tree
+def SelectedPipeCurrentPulseDecisionTree(R_CP, L_CP): #f_i_i_m_m decision tree  
     if R_CP > 70:
         if L_CP < .05:
             a = 1/(4*R_CP)
@@ -260,7 +233,7 @@ def NeighboringPipesPreviousPulseDecisionTree(L, m, i):  #f_i_j_m_n decision tre
             continue
     return f, decision
 
-def NeighboringPipeCurrentPulseDecisionTree(i, m): #f_i_j_m_m decision tree
+def NeighboringPipeCurrentPulseDecisionTree(i, m):  #f_i_j_m_m decision tree
     f = np.zeros(mesh_points.size - 1)
     p = 0
     decision = ""
@@ -307,7 +280,9 @@ def NeighboringPipeCurrentPulseDecisionTree(i, m): #f_i_j_m_m decision tree
 
 
 
-def CrossNeighboringPipesPreviousPulseDecisionTree1(L, m, i): #Decision tree to compute previous cross interaction terms between A and B cylinder. f_Ai_Bj_m_n decision tree
+def CrossNeighboringPipesPreviousPulseDecisionTree(L, m, i):   #decision tree used to compute cross terms in F matrix, such as f_Ai_Bj_m_n
+                                                                #only thing different between this tree and others is that the FLS calculation,
+                                                                #distance is calculated between cross pipe elements of cylinder A and B
 
     f_i_j_m_n = 0
     decision = ""
@@ -322,7 +297,7 @@ def CrossNeighboringPipesPreviousPulseDecisionTree1(L, m, i): #Decision tree to 
                 RPPS = alpha*(t[m] - t[n-1]) / R_j**2
                 LPPS = alpha * (t[m] - t[n-1]) / L**2
                 # S_ij = 1
-                S_ij = np.sqrt((b*d)**2+(center_z[i] - center2_z[j])**2)
+                S_ij = np.sqrt(d**2+(center_z[i] - center2_z[j])**2)
                 SLR = S_ij/L
                 S_CP = (alpha * (t[m] - t[m-1])) / S_ij ** 2
                 # SLR = 0
@@ -383,12 +358,12 @@ def CrossNeighboringPipesPreviousPulseDecisionTree1(L, m, i): #Decision tree to 
                                     decision = "PS1"
                                     f_i_j_m_n = 1/ (4*np.pi*k*SLR) * (sc.erfc(1/(2*np.sqrt(SPPS))) - sc.erfc(1/(2*np.sqrt(SPPE))))
                                                       #PS1
-                            elif SLR <= 0.1 or SPPE <= 100:
-                                decision = "FLS"
+                            elif SLR <= 0.1 or SPPE <= 100: #FLS
+                                decision = "FLS" 
                                 f_i_j_m_n = 0
                                 z, dz = Discretize(j)
                                 for zp in z:
-                                    r = np.sqrt((b*d)**2 + (center_z[i]- zp)**2)
+                                    r = np.sqrt(d**2 + (center_z[i]- zp)**2)
                                     f_i_j_m_n += (1/r) * (sc.erfc(r/(np.sqrt(4*alpha*(t[m] - t[n-1])))) - sc.erfc(r/(np.sqrt(4*alpha*(t[m] - t[n]))))) * dz
                                 f_i_j_m_n = (1/(4*np.pi*k)) * f_i_j_m_n
                 f[p] = f_i_j_m_n
@@ -397,191 +372,7 @@ def CrossNeighboringPipesPreviousPulseDecisionTree1(L, m, i): #Decision tree to 
       
     return f, decision
 
-
-def CrossNeighboringPipesPreviousPulseDecisionTree2(L, m, i): #Decision tree to compute previous cross interaction terms between A and C cylinder. f_Ai_Dj_m_n decision tree
-
-    f_i_j_m_n = 0
-    decision = ""
-    f = np.zeros((mesh_points.size)*(m-1))
-    p = 0
-
-    for j in range(mesh_points.size):
-
-
-            for n in range (1, m):
-                 
-                RPPS = alpha*(t[m] - t[n-1]) / R_j**2
-                LPPS = alpha * (t[m] - t[n-1]) / L**2
-                # S_ij = 1
-                S_ij = np.sqrt((np.sqrt(q+s)*d)**2 + (center_z[i] - center4_z[j])**2)
-                SLR = S_ij/L
-                S_CP = (alpha * (t[m] - t[m-1])) / S_ij ** 2
-                # SLR = 0
-                # SPPS = 0.04
-                SPPS = (alpha * (t[m] - t[n-1])) / S_ij **2
-                RPPE = alpha*(t[m] - t[n]) / R_j**2 
-                LPPE = alpha*(t[m] - t[n]) / L**2
-                # SPPE = 100
-                SPPE = (alpha * (t[m] - t[n])) / S_ij ** 2
-                TDR = (t[m] - t[n]) / (t[n] - t[n-1])
-
-                if SPPS < 0.04:
-                    f_i_j_m_n = 0
-                elif SPPS >= 0.04:
-                    if SLR > 4:
-                        if SPPE > 4:
-                            if TDR > 7:
-                                decision = "PS3"
-                                f_i_j_m_n = L/(8*np.pi*k*TDR*np.sqrt(alpha*np.pi*(t[m] - t[n]))) #PS3
-                        
-                            elif TDR <= 7:
-                                decision = "PS2"
-                                f_i_j_m_n = L/(4*np.pi*k*np.sqrt(alpha*np.pi)) * (1/ np.sqrt((t[m] - t[n])) - 1/np.sqrt((t[m] - t[n-1]))) #PS2
-                                        
-                        elif SPPE <= 4:
-                            decision = "PS1"
-                            f_i_j_m_n = 1/ (4*np.pi*k*SLR) * (sc.erfc(1/(2*np.sqrt(SPPS))) - sc.erfc(1/(2*np.sqrt(SPPE)))) #PS1
-                                              
-                    elif SLR <= 4:
-                        if (SLR > 2 and SPPE > 0.2):
-                            if SPPE > 4:
-                                if TDR > 7:
-                                    decision = "PS3"
-                                    f_i_j_m_n = L/(8*np.pi*k*TDR*np.sqrt(alpha*np.pi*(t[m] - t[n]))) #PS3
-                                    
-                                
-                                if TDR <= 7:
-                                    decision = "PS2"
-                                    f_i_j_m_n = L/(4*np.pi*k*np.sqrt(alpha*np.pi)) * (1/ np.sqrt((t[m] - t[n])) - 1/np.sqrt((t[m] - t[n-1])))          #PS2
-                                   
-                            elif SPPE <= 4:
-                                decision = "PS1"
-                                f_i_j_m_n = 1/ (4*np.pi*k*SLR) * (sc.erfc(1/(2*np.sqrt(SPPS))) - sc.erfc(1/(2*np.sqrt(SPPE))))   
-                                                  #PS1
-                        elif SLR <= 2 or SPPE <= 0.2:
-                            if SLR > 0.1 and SPPE > 100:
-                                if SPPE > 4:
-                                    if TDR > 7:
-                                        decision = "PS3"
-                                        f_i_j_m_n = L/(8*np.pi*k*TDR*np.sqrt(alpha*np.pi*(t[m] - t[n]))) #PS3
-                                       
-                                      
-                                    if TDR <= 7:
-                                        decision = "PS2"
-                                        f_i_j_m_n = L/(4*np.pi*k*np.sqrt(alpha*np.pi)) * (1/ np.sqrt((t[m] - t[n])) - 1/np.sqrt((t[m] - t[n-1])))          #PS2
-                                       
-                                elif SPPE <= 4:
-                                    decision = "PS1"
-                                    f_i_j_m_n = 1/ (4*np.pi*k*SLR) * (sc.erfc(1/(2*np.sqrt(SPPS))) - sc.erfc(1/(2*np.sqrt(SPPE))))
-                                                      #PS1
-                            elif SLR <= 0.1 or SPPE <= 100:
-                                decision = "FLS"
-                                f_i_j_m_n = 0
-                                z, dz = Discretize(j)
-                                for zp in z:
-                                    r = np.sqrt((np.sqrt(q+s)*d)**2 + (center_z[i]- zp)**2)
-                                    f_i_j_m_n += (1/r) * (sc.erfc(r/(np.sqrt(4*alpha*(t[m] - t[n-1])))) - sc.erfc(r/(np.sqrt(4*alpha*(t[m] - t[n]))))) * dz
-                                f_i_j_m_n = (1/(4*np.pi*k)) * f_i_j_m_n
-                f[p] = f_i_j_m_n
-                p +=1
-                
-      
-    return f, decision
-
-
-def CrossNeighboringPipesPreviousPulseDecisionTree3(L, m, i): #Decision tree to compute previous cross interaction terms between A and D cylinders
-
-    f_i_j_m_n = 0
-    decision = ""
-    f = np.zeros((mesh_points.size)*(m-1))
-    p = 0
-
-    for j in range(mesh_points.size):
-
-
-            for n in range (1, m):
-                 
-                RPPS = alpha*(t[m] - t[n-1]) / R_j**2
-                LPPS = alpha * (t[m] - t[n-1]) / L**2
-                # S_ij = 1
-                S_ij = np.sqrt((q*d)**2 + (center_z[i] - center4_z[j])**2)
-                SLR = S_ij/L
-                S_CP = (alpha * (t[m] - t[m-1])) / S_ij ** 2
-                # SLR = 0
-                # SPPS = 0.04
-                SPPS = (alpha * (t[m] - t[n-1])) / S_ij **2
-                RPPE = alpha*(t[m] - t[n]) / R_j**2 
-                LPPE = alpha*(t[m] - t[n]) / L**2
-                # SPPE = 100
-                SPPE = (alpha * (t[m] - t[n])) / S_ij ** 2
-                TDR = (t[m] - t[n]) / (t[n] - t[n-1])
-
-                if SPPS < 0.04:
-                    f_i_j_m_n = 0
-                elif SPPS >= 0.04:
-                    if SLR > 4:
-                        if SPPE > 4:
-                            if TDR > 7:
-                                decision = "PS3"
-                                f_i_j_m_n = L/(8*np.pi*k*TDR*np.sqrt(alpha*np.pi*(t[m] - t[n]))) #PS3
-                        
-                            elif TDR <= 7:
-                                decision = "PS2"
-                                f_i_j_m_n = L/(4*np.pi*k*np.sqrt(alpha*np.pi)) * (1/ np.sqrt((t[m] - t[n])) - 1/np.sqrt((t[m] - t[n-1]))) #PS2
-                                        
-                        elif SPPE <= 4:
-                            decision = "PS1"
-                            f_i_j_m_n = 1/ (4*np.pi*k*SLR) * (sc.erfc(1/(2*np.sqrt(SPPS))) - sc.erfc(1/(2*np.sqrt(SPPE)))) #PS1
-                                              
-                    elif SLR <= 4:
-                        if (SLR > 2 and SPPE > 0.2):
-                            if SPPE > 4:
-                                if TDR > 7:
-                                    decision = "PS3"
-                                    f_i_j_m_n = L/(8*np.pi*k*TDR*np.sqrt(alpha*np.pi*(t[m] - t[n]))) #PS3
-                                    
-                                
-                                if TDR <= 7:
-                                    decision = "PS2"
-                                    f_i_j_m_n = L/(4*np.pi*k*np.sqrt(alpha*np.pi)) * (1/ np.sqrt((t[m] - t[n])) - 1/np.sqrt((t[m] - t[n-1])))          #PS2
-                                   
-                            elif SPPE <= 4:
-                                decision = "PS1"
-                                f_i_j_m_n = 1/ (4*np.pi*k*SLR) * (sc.erfc(1/(2*np.sqrt(SPPS))) - sc.erfc(1/(2*np.sqrt(SPPE))))   
-                                                  #PS1
-                        elif SLR <= 2 or SPPE <= 0.2:
-                            if SLR > 0.1 and SPPE > 100:
-                                if SPPE > 4:
-                                    if TDR > 7:
-                                        decision = "PS3"
-                                        f_i_j_m_n = L/(8*np.pi*k*TDR*np.sqrt(alpha*np.pi*(t[m] - t[n]))) #PS3
-                                       
-                                      
-                                    if TDR <= 7:
-                                        decision = "PS2"
-                                        f_i_j_m_n = L/(4*np.pi*k*np.sqrt(alpha*np.pi)) * (1/ np.sqrt((t[m] - t[n])) - 1/np.sqrt((t[m] - t[n-1])))          #PS2
-                                       
-                                elif SPPE <= 4:
-                                    decision = "PS1"
-                                    f_i_j_m_n = 1/ (4*np.pi*k*SLR) * (sc.erfc(1/(2*np.sqrt(SPPS))) - sc.erfc(1/(2*np.sqrt(SPPE))))
-                                                      #PS1
-                            elif SLR <= 0.1 or SPPE <= 100:
-                                decision = "FLS"
-                                f_i_j_m_n = 0
-                                z, dz = Discretize(j)
-                                for zp in z:
-                                    r = np.sqrt((q*d)**2 + (center_z[i]- zp)**2)
-                                    f_i_j_m_n += (1/r) * (sc.erfc(r/(np.sqrt(4*alpha*(t[m] - t[n-1])))) - sc.erfc(r/(np.sqrt(4*alpha*(t[m] - t[n]))))) * dz
-                                f_i_j_m_n = (1/(4*np.pi*k)) * f_i_j_m_n
-                f[p] = f_i_j_m_n
-                p +=1
-                
-      
-    return f, decision
-
-
-#Decision tree to compute current interaction terms between A and B cylinders
-def CrossNeighboringPipeCurrentPulseDecisionTree1(i, m): 
+def CrossNeighboringPipeCurrentPulseDecisionTree(i, m):  #decision tree for f_Ai_Bj_m_m 
     f = np.zeros(mesh_points.size)
     p = 0
     decision = ""
@@ -589,7 +380,7 @@ def CrossNeighboringPipeCurrentPulseDecisionTree1(i, m):
     for j in range(mesh_points.size):
        
 
-        S_ij = np.sqrt((b)**2+(center_z[i]- center2_z[j])**2)
+        S_ij = np.sqrt(d**2+(center_z[i]- center2_z[j])**2)
         # S_ij = 1
         SLR = S_ij / L
         S_CP = alpha * (t[m] - t[m-1]) / (S_ij**2)
@@ -617,97 +408,7 @@ def CrossNeighboringPipeCurrentPulseDecisionTree1(i, m):
                     zseg, dzseg = Discretize(j)
                     acc = 0.0
                     for zp in zseg:
-                        rr = np.sqrt((b)**2 + (center_z[i] - zp)**2) #May be problematic to have removed R, check later if errors occur
-                        acc += (1/rr) * sc.erfc(rr / np.sqrt(4*alpha*(t[m] - t[m-1]))) * dzseg
-                    f[p] = (1/(4*np.pi*k)) * acc
-
-        p += 1
-
-    return f, decision
-
-def CrossNeighboringPipeCurrentPulseDecisionTree2(i, m): #Decision tree to compute current interaction terms between A and C cylinder
-    f = np.zeros(mesh_points.size)
-    p = 0
-    decision = ""
-
-    for j in range(mesh_points.size):
-       
-
-        S_ij = np.sqrt((np.sqrt(q+s)*d)**2+(center_z[i]- center4_z[j])**2)
-        # S_ij = 1
-        SLR = S_ij / L
-        S_CP = alpha * (t[m] - t[m-1]) / (S_ij**2)
-
-        if S_CP < 0.04:
-            decision = "PN"
-            f[p] = 0.0
-
-        else:
-            if SLR > 4:
-                if S_CP > 4:
-                    decision = "PS2"
-                    f[p] = (1/(4*np.pi*k*SLR)) * (1 - 1/np.sqrt(np.pi*S_CP))
-                else:
-                    decision = "PS1"
-                    f[p] = (1/(4*np.pi*k*SLR)) * sc.erfc(1/(2*np.sqrt(S_CP)))
-
-            else:  
-                if (SLR > 2) and (S_CP > 0.2):
-                    decision = "PS1"
-                    f[p] = (1/(4*np.pi*k*SLR)) * sc.erfc(1/(2*np.sqrt(S_CP)))
-                else:
-                   
-                    decision = "FLS"
-                    zseg, dzseg = Discretize(j)
-                    acc = 0.0
-                    for zp in zseg:
-                        rr = np.sqrt((np.sqrt(q+s)*d)**2 + (center_z[i] - zp)**2)
-                        acc += (1/rr) * sc.erfc(rr / np.sqrt(4*alpha*(t[m] - t[m-1]))) * dzseg
-                    f[p] = (1/(4*np.pi*k)) * acc
-
-        p += 1
-
-    return f, decision
-
-
-
-def CrossNeighboringPipeCurrentPulseDecisionTree3(i, m):#Decision tree to compute current interaction terms between A and D cylinder
-    f = np.zeros(mesh_points.size)
-    p = 0
-    decision = ""
-
-    for j in range(mesh_points.size):
-       
-
-        S_ij = np.sqrt((q)**2+(center_z[i]- center2_z[j])**2)
-        # S_ij = 1
-        SLR = S_ij / L
-        S_CP = alpha * (t[m] - t[m-1]) / (S_ij**2)
-
-        if S_CP < 0.04:
-            decision = "PN"
-            f[p] = 0.0
-
-        else:
-            if SLR > 4:
-                if S_CP > 4:
-                    decision = "PS2"
-                    f[p] = (1/(4*np.pi*k*SLR)) * (1 - 1/np.sqrt(np.pi*S_CP))
-                else:
-                    decision = "PS1"
-                    f[p] = (1/(4*np.pi*k*SLR)) * sc.erfc(1/(2*np.sqrt(S_CP)))
-
-            else:  
-                if (SLR > 2) and (S_CP > 0.2):
-                    decision = "PS1"
-                    f[p] = (1/(4*np.pi*k*SLR)) * sc.erfc(1/(2*np.sqrt(S_CP)))
-                else:
-                   
-                    decision = "FLS"
-                    zseg, dzseg = Discretize(j)
-                    acc = 0.0
-                    for zp in zseg:
-                        rr = np.sqrt((q)**2 + (center_z[i] - zp)**2) #May be problematic to have removed R, check later if errors occur
+                        rr = np.sqrt(d**2 + (center_z[i] - zp)**2) #May be problematic to have removed R, check later if errors occur
                         acc += (1/rr) * sc.erfc(rr / np.sqrt(4*alpha*(t[m] - t[m-1]))) * dzseg
                     f[p] = (1/(4*np.pi*k)) * acc
 
@@ -723,8 +424,8 @@ def CrossNeighboringPipeCurrentPulseDecisionTree3(i, m):#Decision tree to comput
 
 
 
-
 #Functions used to calculate history terms 
+
 def history_within(block_Q, i, m):
     return np.delete(block_Q, i, axis=0)[:, 1:m].reshape(-1)
 
@@ -733,42 +434,22 @@ def history_cross(other_block_Q, m):
 
 
 
-#Initialize F matrix and A vector for the SBT algorithm
-F = np.zeros((N_cyl*mesh_points.size, N_cyl*mesh_points.size))
-A = np.zeros(N_cyl*mesh_points.size)
+
+F = np.zeros((2*mesh_points.size, 2*mesh_points.size))  #Initialize F matrix and A vector used in FQ = A 
+A = np.zeros(2*mesh_points.size)
 debug_decision_array = np.full((mesh_points.size, t.size), '' ,dtype = "S3")
 
 
-#--SBT Algorithm--
-for m in tqdm(range(1, len(t)), desc = "Computing Heat"):
-
-    #F matrix set up: F = [F_AA F_AB F_AC F_AD
-                        #  F_BA F_BB F_BC F_BD
-                        #  F_CA F_CB F_CC F_CD
-                        #  F_DA F_DB F_DC F_DD]
-                        
-
-    #Due to symmetry, F_AA = F_BB = F_CC = F_DD
-    # F_AB = F_BA^T, F_CD = F_DC^T, F_BC = F_CB^T, F_AD = F_DA^T, etc. (F_XY = F_YX^T, where T = transpose)
-    #Because of high symmetry, we can just calculate F_edge_close, F_diagonal, and F_edge_far.
+for m in tqdm(range(1, len(t)), desc = "Computing Heat"):  #Calculation begins here
     F.fill(0.0)
     A.fill(0.0)
-    F_edge_close = np.zeros((N_points, N_points))
-    F_diagonal = np.zeros((N_points, N_points))
-    F_edge_far = np.zeros((N_points, N_points))
+    F_AB = np.zeros((N_points, N_points))  #F_AB = block matrix for entries that calculate temperature rise at element A_i at time m on cylinder A from a unit heat pulse from element B_j on cylinder B at time n
     decAB = np.empty(N_points, dtype='object')
-    decAD = np.empty(N_points, dtype='object')
-    decAC = np.empty(N_points, dtype='object')
 
     for i in range(N_points):
-        F_edge_close[i,:], decAB[i] = CrossNeighboringPipeCurrentPulseDecisionTree1(i,m)
-        F_diagonal[i,:], decAD[i] = CrossNeighboringPipeCurrentPulseDecisionTree2(i,m)
-        F_edge_far[i,:], decAC[i] = CrossNeighboringPipeCurrentPulseDecisionTree3(i,m)
+        F_AB[i,:], decAB[i] = CrossNeighboringPipeCurrentPulseDecisionTree(i,m)
     
-
-    F_edge_close_T = F_edge_close.T
-    F_diagonal_T = F_diagonal.T
-    F_edge_far_T = F_edge_far.T
+    F_BA = F_AB.T       #identical cylinders in a homogenous, istropic medium gives us symmetry that F_BA = transpose of F_AB 
     
     for i in range(mesh_points.size):
 
@@ -782,105 +463,77 @@ for m in tqdm(range(1, len(t)), desc = "Computing Heat"):
         f_neighbors_current, decision_neighbor_current = NeighboringPipeCurrentPulseDecisionTree(i, m)
 
         f_neighbors_previous, decision_neighbor_previous = NeighboringPipesPreviousPulseDecisionTree(L,m,i)
-        f_edge_close_prev,decision_cross_edge_close_prev = CrossNeighboringPipesPreviousPulseDecisionTree1(L, m, i) 
-        f_diag_prev, decision_cross_diag_prev = CrossNeighboringPipesPreviousPulseDecisionTree2(L,m,i)
-        f_edge_far_prev, decision_cross_edge_far_prev = CrossNeighboringPipesPreviousPulseDecisionTree3(L,m,i)
+        f_cross_prev,decision_cross_prev = CrossNeighboringPipesPreviousPulseDecisionTree(L, m, i)
         
 
      
 
         
-        F_new_row = np.insert(f_neighbors_current, i, f_self_current)
-       #Construct the F matrix
-        F[i,0:N_points] = F_new_row    # for A cylinder
-        F[i, N_points: 2*N_points] = F_edge_close[i,:] 
-        F[i, 2*N_points:3*N_points] = F_edge_far[i,:]   
-        F[i, 3*N_points: 4*N_points] = F_diagonal[i,:]
+        F_new_row = np.insert(f_neighbors_current, i, f_self_current) #F_new_row = F_AA and F_BB block matrix, symmetry implies that F_AA = F_BB
+       
+        F[i,0:N_points] = F_new_row     #Building the F matrix each time step: [F_AA  F_AB
+                                                                            #   F_BA F_BB ]
+        F[i, N_points: 2*N_points] = F_AB[i,:]
+        F[N_points + i, 0:N_points] = F_BA[i,:]
+        F[N_points + i, N_points:2*N_points] = F_new_row
 
-        F[N_points + i, 0:N_points] = F_edge_close_T[i,:]   #for B cylinder
-        F[N_points + i, N_points:2*N_points] = F_new_row  
-        F[N_points + i, 2*N_points: 3*N_points] = F_diagonal[i,:]
-        F[N_points + i, 3*N_points: 4*N_points] = F_edge_far[i,:]
-
-        F[2*N_points + i, 0:N_points] = F_edge_far_T[i,:]   # for C cylinder
-        F[2*N_points + i, N_points: 2*N_points] = F_diagonal_T[i,:]
-        F[2*N_points + i, 2*N_points: 3*N_points] = F_new_row
-        F[2*N_points + i, 3*N_points: 4*N_points] = F_edge_close[i,:]
-        
-        F[3*N_points + i, 0:N_points] = F_diagonal_T[i,:]    # for D cylinder
-        F[3*N_points + i, N_points: 2*N_points] = F_edge_far_T[i,:]
-        F[3*N_points + i, 2*N_points: 3*N_points] = F_edge_close_T[i,:]
-        F[3*N_points + i, 3*N_points: 4*N_points] = F_new_row
-
-        #Construct the Q vector
         Q_A = Q[0:N_points, :]                 
-        Q_B = Q[N_points:2*N_points, :]
-        Q_C = Q[2*N_points: 3*N_points, :]
-        Q_D = Q[3*N_points:4*N_points,]       
+        Q_B = Q[N_points:2*N_points, :]       #Initialize the Q vector from the Q matrix and prepare to fill it with values
 
         Q_A_nei_prev = history_within(Q_A, i, m)    
-        Q_B_nei_prev = history_within(Q_B, i, m)
-        Q_C_nei_prev = history_within(Q_C, i, m)
-        Q_D_nei_prev = history_within(Q_D, i, m)      
+        Q_B_nei_prev = history_within(Q_B, i, m)     
 
-        Q_A_cross_prev = history_cross(Q_A, m)
-        Q_B_cross_prev = history_cross(Q_B, m)
-        Q_C_cross_prev = history_cross(Q_C,m)
-        Q_D_cross_prev = history_cross(Q_D, m)        
-        
-                
-        #Construct the history vector
-        H_A = (np.dot(f_self_previous, Q_A[i, 1:m])
+        Q_B_to_A_prev = history_cross(Q_B, m)        
+        Q_A_to_B_prev = history_cross(Q_A, m)        
+
+        H_A = (np.dot(f_self_previous, Q_A[i, 1:m])   
             + np.dot(f_neighbors_previous, Q_A_nei_prev)
-            + np.dot(f_edge_close_prev, Q_B_cross_prev)
-            + np.dot(f_edge_far_prev, Q_C_cross_prev)
-            + np.dot(f_diag_prev, Q_D_cross_prev))
+            + np.dot(f_cross_prev, Q_B_to_A_prev))
 
         H_B = (np.dot(f_self_previous, Q_B[i, 1:m])
             + np.dot(f_neighbors_previous, Q_B_nei_prev)
-            + np.dot(f_edge_close_prev, Q_A_cross_prev)
-            + np.dot(f_diag_prev, Q_C_cross_prev)
-            + np.dot(f_edge_far_prev, Q_D_cross_prev))
+            + np.dot(f_cross_prev, Q_A_to_B_prev))
 
-        H_C = (np.dot(f_self_previous, Q_C[i, 1:m])
-        + np.dot(f_neighbors_previous, Q_C_nei_prev)
-        + np.dot(f_edge_far_prev, Q_A_cross_prev)
-        + np.dot(f_diag_prev, Q_B_cross_prev)
-        + np.dot(f_edge_close_prev, Q_D_cross_prev))
-
-        H_D = (np.dot(f_self_previous, Q_D[i, 1:m])
-        + np.dot(f_neighbors_previous, Q_D_nei_prev)
-        + np.dot(f_edge_far_prev, Q_B_cross_prev)
-        + np.dot(f_diag_prev, Q_A_cross_prev)
-        + np.dot(f_edge_close_prev, Q_C_cross_prev))
-
-        A[i] = 10 - H_A
+        A[i] = 10 - H_A   #The A vector = Temperature of cylinder at time step m - History of heat pulses for that cylinder
         A[N_points + i] = 10 - H_B
-        A[2*N_points + i] = 10 - H_C
-        A[3*N_points + i] = 10 - H_D
 
-#Solve for Q 
-    Q[:, m] =  np.linalg.solve(F, A) 
+        
+
+        
+    
+    Q[:, m] =  np.linalg.solve(F, A)  #Invert F and multiply it to A to attain Q
 
 
-#Non dimensionalized heat flux and time according to how Beckers did it.
-Q_nondim = Q/(10 * k)
+
+
+
+        
+
+
+Q_nondim = Q/(10 * k)  #Non dimensionalized heat flux according to Becker's SBT paper
 t_nondim = np.sqrt(alpha*t) 
 
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt 
 
-#--Post processing, error analysis, and graphing--
+csv_path = "TwoCylinderMidPoint.csv"  #Becker's SBT data for 2 cylinders. Nondimensionalized heat flux at the midpoint is plotted versus nondimesnionalized time.
 
-csv_path = "TwoCylinderMidPoint.csv"
 
-df = pd.read_csv(csv_path, header=None, comment="#")
+try:
+    df = pd.read_csv(csv_path, header=None, comment='#')
+except Exception as e:
+    raise RuntimeError(f"Could not read {csv_path}: {e}")
 
 
 if isinstance(df.iloc[0, 0], str) and not any(ch.isdigit() for ch in df.iloc[0, 0]):
     df = df.iloc[1:].reset_index(drop=True)
 
+
 if df.shape[1] == 1:
     xy = df.iloc[:, 0].astype(str).str.split(",", expand=True)
     df = xy
+
 
 x_csv = pd.to_numeric(df.iloc[:, 0], errors="coerce").to_numpy()
 y_csv = pd.to_numeric(df.iloc[:, 1], errors="coerce").to_numpy()
@@ -888,35 +541,55 @@ mask = np.isfinite(x_csv) & np.isfinite(y_csv)
 x_csv, y_csv = x_csv[mask], y_csv[mask]
 
 
-labels = ["A", "B", "C", "D"]
-
-fig, axes = plt.subplots(2, 2, figsize=(11, 8), sharex=True, sharey=True)
-axes = axes.flatten()
-
-for c in range(4):
-    idx = c * N_points + mid  
-
-   
-    axes[c].loglog(
-        t_nondim[1:],
-        Q_nondim[idx, 1:],
-        label=f"4-cylinder SBT (Cylinder {labels[c]} midpoint)"
-    )
 
 
-    axes[c].loglog(
-        x_csv,
-        y_csv,
-        marker="o",
-        linestyle="none",
-        label="2-cylinder SBT (CSV)"
-    )
+#Plot of nondimensional heatflux of midpoint of cylinder A/B versus nondimensionalized time.
 
-    axes[c].set_title(f"Cylinder {labels[c]} midpoint")
-    axes[c].set_xlabel(r"$\sqrt{\alpha t}$")
-    axes[c].set_ylabel(r"$q/(10k)$")
-    axes[c].grid(True, which="both")
-    axes[c].legend()
+plt.figure()
+plt.loglog(t_nondim[1:], Q_nondim[mid, 1:], label="Your simulation (midpoint)")
+plt.loglog(x_csv, y_csv, marker="o", linestyle="none", label="TwoCylinderMidPoint.csv")
 
-plt.tight_layout()
+plt.xlabel(r"non dimensionalized time")
+plt.ylabel(r"non dimensionalized heat flux")
+plt.xlim(1e-2, 1e1)
+plt.ylim(0, 1e3)
+plt.grid(True, which="both")
+plt.legend()
 plt.show()
+
+# --- Error analysis against Becker data ---
+
+# Your model data (midpoint only, skipping t=0 if needed)
+x_model = t_nondim[1:]
+y_model = Q_nondim[mid, 1:]
+
+# Keep only overlapping positive domain for log interpolation
+mask_model = (x_model > 0) & np.isfinite(x_model) & np.isfinite(y_model)
+mask_csv = (x_csv > 0) & np.isfinite(x_csv) & np.isfinite(y_csv)
+
+x_model = x_model[mask_model]
+y_model = y_model[mask_model]
+x_beck = x_csv[mask_csv]
+y_beck = y_csv[mask_csv]
+
+# Restrict Becker points to the domain covered by your model
+mask_overlap = (x_beck >= x_model.min()) & (x_beck <= x_model.max())
+x_beck_overlap = x_beck[mask_overlap]
+y_beck_overlap = y_beck[mask_overlap]
+
+# Interpolate your model onto Becker's x-values in log-space
+y_model_interp = np.interp(
+    np.log10(x_beck_overlap),
+    np.log10(x_model),
+    y_model
+)
+
+# Error metrics
+errors = y_model_interp - y_beck_overlap
+abs_errors = np.abs(errors)
+
+rmse = np.sqrt(np.mean(errors**2))
+mae = np.mean(abs_errors)
+
+print(f"RMSE = {rmse:.6f}")
+print(f"MAE  = {mae:.6f}")

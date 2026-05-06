@@ -7,44 +7,54 @@ from scipy.optimize import curve_fit
 from tqdm import tqdm
 
 
-#None of these values changed here from the 2 cylinder SBT set up
+#--Preprocessing--
 
-k = 1
-alpha = 1e-6
-t = np.logspace(2, 9, 150)
-R = 0.05
-N_points = 10
-L = 10 / N_points
-mesh_points = (np.arange(N_points)+ 0.5) * L
-T_0 = 10
-N_cyl = 4
-midpoint = mesh_points[N_points//2]
-Q = np.zeros((N_cyl*mesh_points.size, t.size))
-N_fls = 10
-pc_p = k / alpha
+k = 1 #Thermal conductivity
+alpha = 1e-6 #Thermal diffusivity
+t = np.logspace(2, 9, 150) #Time from 10^2 to 10^9 seconds (30 years)
+R = 0.05 #Radius of cylinder
+N_points = 10 # Number of pipe elements per cylinder
+L = 10 / N_points #Pipe element length
+mesh_points = (np.arange(N_points)+ 0.5) * L #Mesh point coordinates
+T_0 = 10  #Cylinder is kept at constant 10C
+N_cyl = 4  #Number of cylinders
+midpoint = mesh_points[N_points//2] #Midpoint of cylinder index
+Q = np.zeros((N_cyl*mesh_points.size, t.size)) #Initialize heat flux matrix 
+N_fls = 10     #FLS integrals are converted into sums. N_fls is the number of summations. Higher N_fls means higher accuracy, slower computational time
+pc_p = k / alpha  #specific heat c_p = k/ (p * alpha)
 d = 1
 
+#Indexes
 mid = N_points//2
 end = N_points -1
 
 
 
+#Grid set up of boreholes:  
+#             q 
+#    A ---------------C
+#    |                |
+#  b |                |  s
+#    |                |
+#    B ---------------D 
+#            q
 
 
-print(mesh_points)
+
+#Initializing borehole geometry for 4 boreholes
 e_inner = 1
 centerline = np.zeros((mesh_points.size, 3))  # A cylinder
 centerline[:, 2] = mesh_points
 center_z = centerline[:, 2]
 
-s = 1  #Distance of 
-b = 1  
+s = 1  #Distance of cylinder A to B
+b = 1  #Distance of cylinder C to D
 centerline2 = np.zeros((mesh_points.size, 3))  # B cylinder 
 centerline2[:,2] = mesh_points
 centerline2[:,0] = b
 center2_z = centerline2[:,2]
 
-q = 1 #Distance of cylinder C from A and cylinder D from B, essentially length of one side of the rectangle
+q = 1e8 #Distance of cylinder C from A and cylinder D from B, essentially length of one side of the rectangle
         #Put to 1 to see square set up, put to infinity to see that heat flux reduces to 2 cases of 2-cylinder heat flux
 
 centerline3 = np.zeros((mesh_points.size, 3))  # C cylinder
@@ -61,7 +71,7 @@ center4_z = centerline4[:,2]
 
 
 
-
+#Function used for Finite Line Segment or 'FLS' calculation in decision trees
 def Discretize(j):
     z0 = j * L
     z1 = (j+1) * L
@@ -73,7 +83,7 @@ def Discretize(j):
 
 
 
-def SelectedPipeCurrentPulseDecisionTree(R_CP, L_CP): #f_i_i_m_m entry
+def SelectedPipeCurrentPulseDecisionTree(R_CP, L_CP): #f_i_i_m_m decision tree
     if R_CP > 70:
         if L_CP < .05:
             a = 1/(4*R_CP)
@@ -97,7 +107,7 @@ def SelectedPipeCurrentPulseDecisionTree(R_CP, L_CP): #f_i_i_m_m entry
             integral_val2, integral_err2 = integrate.quad(lambda x: (1/x)*sc.erfc(1/2 * np.sqrt(x)),b, np.inf)
             return (2/(np.pi**3 * k) * integral_val - (1/(4*np.pi*k)) * integral_val2), decision_taken #FCS
     
-def SelectedPipePreviousPulseDecisionTree(m, L):
+def SelectedPipePreviousPulseDecisionTree(m, L): #f_i_i_m_n decision tree
     decision = ""
     f = np.zeros(m-1)
     p = 0
@@ -158,7 +168,7 @@ def SelectedPipePreviousPulseDecisionTree(m, L):
         p += 1
     return f, decision     
 
-def NeighboringPipesPreviousPulseDecisionTree(L, m, i):
+def NeighboringPipesPreviousPulseDecisionTree(L, m, i):  #f_i_j_m_n decision tree
 
     f_i_j_m_n = 0
     decision = ""
@@ -250,7 +260,7 @@ def NeighboringPipesPreviousPulseDecisionTree(L, m, i):
             continue
     return f, decision
 
-def NeighboringPipeCurrentPulseDecisionTree(i, m):
+def NeighboringPipeCurrentPulseDecisionTree(i, m): #f_i_j_m_m decision tree
     f = np.zeros(mesh_points.size - 1)
     p = 0
     decision = ""
@@ -297,7 +307,7 @@ def NeighboringPipeCurrentPulseDecisionTree(i, m):
 
 
 
-def CrossNeighboringPipesPreviousPulseDecisionTree1(L, m, i):
+def CrossNeighboringPipesPreviousPulseDecisionTree1(L, m, i): #Decision tree to compute previous cross interaction terms between A and B cylinder. f_Ai_Bj_m_n decision tree
 
     f_i_j_m_n = 0
     decision = ""
@@ -388,7 +398,7 @@ def CrossNeighboringPipesPreviousPulseDecisionTree1(L, m, i):
     return f, decision
 
 
-def CrossNeighboringPipesPreviousPulseDecisionTree2(L, m, i):
+def CrossNeighboringPipesPreviousPulseDecisionTree2(L, m, i): #Decision tree to compute previous cross interaction terms between A and C cylinder. f_Ai_Dj_m_n decision tree
 
     f_i_j_m_n = 0
     decision = ""
@@ -479,7 +489,7 @@ def CrossNeighboringPipesPreviousPulseDecisionTree2(L, m, i):
     return f, decision
 
 
-def CrossNeighboringPipesPreviousPulseDecisionTree3(L, m, i):
+def CrossNeighboringPipesPreviousPulseDecisionTree3(L, m, i): #Decision tree to compute previous cross interaction terms between A and D cylinders
 
     f_i_j_m_n = 0
     decision = ""
@@ -570,8 +580,8 @@ def CrossNeighboringPipesPreviousPulseDecisionTree3(L, m, i):
     return f, decision
 
 
-
-def CrossNeighboringPipeCurrentPulseDecisionTree1(i, m):
+#Decision tree to compute current interaction terms between A and B cylinders
+def CrossNeighboringPipeCurrentPulseDecisionTree1(i, m): 
     f = np.zeros(mesh_points.size)
     p = 0
     decision = ""
@@ -615,7 +625,7 @@ def CrossNeighboringPipeCurrentPulseDecisionTree1(i, m):
 
     return f, decision
 
-def CrossNeighboringPipeCurrentPulseDecisionTree2(i, m):
+def CrossNeighboringPipeCurrentPulseDecisionTree2(i, m): #Decision tree to compute current interaction terms between A and C cylinder
     f = np.zeros(mesh_points.size)
     p = 0
     decision = ""
@@ -661,7 +671,7 @@ def CrossNeighboringPipeCurrentPulseDecisionTree2(i, m):
 
 
 
-def CrossNeighboringPipeCurrentPulseDecisionTree3(i, m):
+def CrossNeighboringPipeCurrentPulseDecisionTree3(i, m):#Decision tree to compute current interaction terms between A and D cylinder
     f = np.zeros(mesh_points.size)
     p = 0
     decision = ""
@@ -714,7 +724,7 @@ def CrossNeighboringPipeCurrentPulseDecisionTree3(i, m):
 
 
 
-
+#Functions used to calculate history terms 
 def history_within(block_Q, i, m):
     return np.delete(block_Q, i, axis=0)[:, 1:m].reshape(-1)
 
@@ -723,13 +733,24 @@ def history_cross(other_block_Q, m):
 
 
 
-
+#Initialize F matrix and A vector for the SBT algorithm
 F = np.zeros((N_cyl*mesh_points.size, N_cyl*mesh_points.size))
 A = np.zeros(N_cyl*mesh_points.size)
 debug_decision_array = np.full((mesh_points.size, t.size), '' ,dtype = "S3")
 
 
+#--SBT Algorithm--
 for m in tqdm(range(1, len(t)), desc = "Computing Heat"):
+
+    #F matrix set up: F = [F_AA F_AB F_AC F_AD
+                        #  F_BA F_BB F_BC F_BD
+                        #  F_CA F_CB F_CC F_CD
+                        #  F_DA F_DB F_DC F_DD]
+                        
+
+    #Due to symmetry, F_AA = F_BB = F_CC = F_DD
+    # F_AB = F_BA^T, F_CD = F_DC^T, F_BC = F_CB^T, F_AD = F_DA^T, etc. (F_XY = F_YX^T, where T = transpose)
+    #Because of high symmetry, we can just calculate F_edge_close, F_diagonal, and F_edge_far.
     F.fill(0.0)
     A.fill(0.0)
     F_edge_close = np.zeros((N_points, N_points))
@@ -770,7 +791,7 @@ for m in tqdm(range(1, len(t)), desc = "Computing Heat"):
 
         
         F_new_row = np.insert(f_neighbors_current, i, f_self_current)
-       
+       #Construct the F matrix
         F[i,0:N_points] = F_new_row    # for A cylinder
         F[i, N_points: 2*N_points] = F_edge_close[i,:] 
         F[i, 2*N_points:3*N_points] = F_edge_far[i,:]   
@@ -791,7 +812,7 @@ for m in tqdm(range(1, len(t)), desc = "Computing Heat"):
         F[3*N_points + i, 2*N_points: 3*N_points] = F_edge_close_T[i,:]
         F[3*N_points + i, 3*N_points: 4*N_points] = F_new_row
 
-
+        #Construct the Q vector
         Q_A = Q[0:N_points, :]                 
         Q_B = Q[N_points:2*N_points, :]
         Q_C = Q[2*N_points: 3*N_points, :]
@@ -808,7 +829,7 @@ for m in tqdm(range(1, len(t)), desc = "Computing Heat"):
         Q_D_cross_prev = history_cross(Q_D, m)        
         
                 
-
+        #Construct the history vector
         H_A = (np.dot(f_self_previous, Q_A[i, 1:m])
             + np.dot(f_neighbors_previous, Q_A_nei_prev)
             + np.dot(f_edge_close_prev, Q_B_cross_prev)
@@ -838,25 +859,16 @@ for m in tqdm(range(1, len(t)), desc = "Computing Heat"):
         A[2*N_points + i] = 10 - H_C
         A[3*N_points + i] = 10 - H_D
 
-        
-
-        
-    
+#Solve for Q 
     Q[:, m] =  np.linalg.solve(F, A) 
 
 
-
-
-
-        
-
-
+#Non dimensionalized heat flux and time according to how Beckers did it.
 Q_nondim = Q/(10 * k)
 t_nondim = np.sqrt(alpha*t) 
 
 
-
-
+#--Post processing, error analysis, and graphing--
 
 csv_path = "TwoCylinderMidPoint.csv"
 

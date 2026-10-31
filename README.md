@@ -2,37 +2,43 @@
 
 ## Project Overview
 
-Developed a Python-based numerical heat-transfer model using Slender Body Theory (SBT) to simulate transient heat conduction in geothermal systems. Recreated four benchmark configurations from Koenraad F. Beckers' research, including single and interacting cylinders, a geothermal slinky with fluid advection, and square and rectangular borehole grids. The project demonstrates how reduced-order mathematical modeling can substantially accelerate long-term geothermal simulations compared with conventional finite-element methods.
+Developed a Python-based reduced-order numerical model using Slender Body Theory (SBT) to simulate transient heat transfer in geothermal systems. The project applies recently published mathematical research to model single and interacting boreholes, slanted geometries, geothermal slinkies, and multi-borehole configurations with substantially lower computational costs than traditional finite-element simulations.
 
 ## Theory
 
-Slender Body Theory approximates transient heat transfer around elongated geometries whose radius is small relative to their length and the thermal diffusion length. The geometry is discretized into centerline elements, and the temperature field is constructed by matching an inner solution representing an infinite cylindrical source with an outer solution formed through Green's function superposition.
+Slender Body Theory approximates transient heat conduction around elongated geometries by matching an inner cylindrical temperature solution with an outer solution constructed from discrete Green's functions. Discretizing the geometry into centerline elements transforms the heat-transfer problem into a system of linear equations:
 
-The resulting temperature–heat-flux relationship is expressed as a system of linear equations:
+$$\mathbf{F}\mathbf{Q}=\mathbf{T}-\mathbf{H}$$
 
-$$\mathbf{T}=\mathbf{F}\mathbf{Q}$$
+where \(\mathbf{F}\) is the Green's function thermal response matrix, \(\mathbf{Q}\) represents element heat fluxes, \(\mathbf{T}\) represents temperatures, and \(\mathbf{H}\) accounts for historical heat contributions.
 
-where \(\mathbf{F}\) is the thermal response matrix constructed from Green's functions, \(\mathbf{Q}\) represents the heat fluxes, and \(\mathbf{T}\) represents the corresponding temperature response. Solving this system enables efficient prediction of transient thermal behavior across different geothermal geometries.
+For fluid-coupled systems, thermal resistance is incorporated to obtain:
+
+$$(\mathbf{R}+\mathbf{F})\mathbf{Q}=\mathbf{T}_f-\mathbf{H}$$
+
+where \(\mathbf{R}\) is a diagonal thermal resistance matrix and \(\mathbf{T}_f\) contains fluid temperatures.
 
 ## How It Was Built
 
-Developed a Python reduced-order heat-transfer solver by discretizing cylindrical and helical geometries into centerline elements and constructing matrix-based systems of discrete Green's functions. Implemented **Fourier-number-based decision trees** to select appropriate analytical approximations and eliminate negligible thermal interactions, reducing matrix computation without sacrificing benchmark accuracy. Exploited geometric symmetry and block-matrix structure to minimize redundant calculations across multiple interacting boreholes.
+Developed a Python numerical solver that discretizes vertical, slanted, and helical geothermal geometries into centerline elements and constructs Green's function response matrices using **Fourier-number-based decision trees**. Implemented analytical approximations for infinite and finite cylindrical and line sources, point-source approximations, and adaptive numerical quadrature to evaluate current and historical thermal interactions. Eliminated negligible interactions based on thermal diffusion length and exploited geometric symmetry to reduce redundant matrix calculations.
 
-Extended the solver to model coupled conduction and fluid convection in a geothermal slinky by incorporating thermal resistance relationships and historical heat-pulse contributions. Implemented backward Euler time integration with first-order upwind spatial discretization to solve the fluid advection equation and predict outlet temperatures. Validated numerical outputs against published benchmarks using RMSE and MAE statistical error analysis.
+Extended the algorithm to simulate coupled conduction, convection, and fluid advection by incorporating pipe thermal resistance, Reynolds- and Prandtl-number-dependent Nusselt correlations, and historical heat-pulse superposition. Solved matrix systems using NumPy linear algebra and applied backward Euler time integration with first-order upwind spatial discretization to update fluid temperatures. Validated simulation outputs against published SBT benchmarks and independent TRNSYS simulations using Pandas interpolation, RMSE, MAE, and SMAPE.
 
 ## Results
 
-**Single Cylinder:** Simulated approximately 31 years of transient heat transfer using 10 centerline elements and 150 logarithmically spaced time steps, achieving an RMSE of 2.848 W and MAE of 0.406 W against published benchmark results.
+**Single Cylinder:** Simulated 31 years of transient heat transfer using 150 logarithmically spaced time steps, achieving an RMSE of 2.848 W and MAE of 0.406 W against published SBT benchmarks.
 
-**Two Interacting Cylinders:** Modeled coupled thermal interactions using symmetric block matrices, completing the simulation in 27 seconds with an RMSE of 2.407 W and MAE of 0.69 W.
+**Two Interacting Cylinders:** Modeled coupled heat transfer using symmetric block matrices, completing simulations in 27 seconds with an RMSE of 2.407 W and MAE of 0.69 W.
 
-**Geothermal Slinky:** Simulated coupled conductive and advective heat transfer over approximately 115 days using 30 helical pipe elements, achieving an outlet-temperature RMSE of 1.122°C and MAE of 0.558°C in approximately 2 minutes and 47 seconds.
+**Geothermal Slinky:** Simulated approximately 115 days of coupled conductive and advective heat transfer, achieving outlet-temperature RMSE of 1.122°C and MAE of 0.558°C in approximately 2 minutes and 47 seconds.
 
-**Borehole Grids:** Extended the algorithm to square and rectangular multi-borehole configurations, exploiting matrix symmetry to achieve simulation runtimes of 37 and 33 seconds, respectively. Verified convergence toward the two-cylinder benchmark behavior at large borehole separations.
+**Borehole Grids:** Exploited geometric symmetry and reusable interaction coefficients to simulate square and rectangular borehole configurations in 37 and 33 seconds, respectively.
+
+**Slanted Geothermal Boreholes:** Extended the SBT framework to slanted geothermal geometries, incorporating fluid convection correlations, thermal resistance, and transient heat-transfer modeling. Compared simulated heat-flux trajectories against TRNSYS reference data using time-series interpolation and SMAPE analysis.
 
 ## Technologies
 
-Python, NumPy, SciPy, Pandas, Matplotlib, Slender Body Theory, Discrete Green's Functions, Numerical Linear Algebra, Block-Matrix Optimization, Fourier-Number Asymptotics, Backward Euler, Upwind Discretization, Transient Heat Transfer, Statistical Error Analysis.
+Python, NumPy, SciPy, Pandas, Matplotlib, Slender Body Theory, Discrete Green's Functions, Numerical Linear Algebra, Matrix Optimization, Adaptive Quadrature, Backward Euler, Upwind Discretization, Heat Transfer, Statistical Error Analysis, TRNSYS.
 
 ## Research Reference
 

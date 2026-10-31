@@ -1,34 +1,39 @@
-# Slender Body Theory
+# Geothermal Heat Transfer Modeling Using Slender Body Theory (SBT)
 
-Originating from the study of Stokes flow, Slendery Body Theory can be applied to heat transfer problems where the source geometry is sufficiently longer than its radius and its radius is sufficiently smaller than the diffusion length of the heat. 
-The body is parameterized to its centerline, which is discretized into 'pipe elements' of some appropriate element length such that the geometry is respected. The body is assumed to be in an infinite conductive medium whose thermal properties do not depend on the temperature. 
-An inner solution of temperature approximates the geometry seen by a point close to the body as an infinite cylindrical source, while farfield points will 'see' a series of discrete point sources, which can be realized as an 'outer solution' by convoluting the heat kernel with the heat point sources.
-By matching the limits of the inner and outer temperature solutions, the final temperature solution is achieved and once discretized becomes a system of linear equations that can be solved for the heat transfer from the body. 
+## Project Overview
 
-Several benchmarks from the seminal Slender Body Theory paper are recreated here and compared alongside the author's (Koenraad F. Beckers) results for various practical geothermal systems. 
+Developed a Python-based numerical heat-transfer model using Slender Body Theory (SBT) to simulate transient heat conduction in geothermal systems. Recreated four benchmark configurations from Koenraad F. Beckers' research, including single and interacting cylinders, a geothermal slinky with fluid advection, and square and rectangular borehole grids. The project demonstrates how reduced-order mathematical modeling can substantially accelerate long-term geothermal simulations compared with conventional finite-element methods.
 
-For the first benchmark problem of a cylinder at constant temperature 10C in an infinite conductive medium of constant temperature 0C, heat transfer is solved for via building the system of linear equations and matrix inversion. The coefficients for the linear system are calculated via a decision tree that takes
-nondimensional Fourier numbers as inputs to determine appropriate choice of coefficients, which greatly simplifies computation. For example, if one were to discretize the cylindrical centerline and only consider heat flux from the midpoint, then mesh points on the centerline far from the mid point would contribute less
-to the heat flux of the middle, thus their coefficients end up being 0 and they are not relevant for calculating heatflux to the midpoint. This decision tree greatly speeds up computation time by forcing the algorithm to only focus on relevant terms without a loss in accuracy, and allows one to simulate long time scale behavior of temperature distributions.
+## Theory
 
-The cylinder is of length 10m with radius 0.05m and discretized into 10 points. The infinite conductive medium has a thermal conductivity of 1 W/mK and diffusivity of 1x10^-6 m^2/s.
-Logarithmic time is used from 10^2 to 10^9 seconds (approximately 31 years) with 150 time steps. Heat flux and time is nondimensionalized by Q/(delta T * k) and sqrt(diffusivity * time) respectively.
+Slender Body Theory approximates transient heat transfer around elongated geometries whose radius is small relative to their length and the thermal diffusion length. The geometry is discretized into centerline elements, and the temperature field is constructed by matching an inner solution representing an infinite cylindrical source with an outer solution formed through Green's function superposition.
 
-Nondimensionalized heat flux versus time data matches that of the results of Koenraad F. Beckers, the author of the seminal paper on studying heat transfer via Slender Body Theory [ref], with root mean square error of 2.848 W and mean absolute error of 0.406.
+The resulting temperature–heat-flux relationship is expressed as a system of linear equations:
 
-For the second benchmark problem of two identical cylinders at constant temperature 10 C in an infinite conductive medium of constant temperature of 0C, we solve heat transfer from both cylinders which are spaced by a distance of 1m. Cylinder parameters are identical to the single cylinder case. The heat transfer from each cylinder is coupled with the other by simply doubling the matrix size and heat vector such that it includes contributing terms from the pipe elements of the opposite cylinder. There exists a natural symmetry in this case for the matrix, which can be resolved into 4 block matrices with the two diagonal block matrices being equal and the anti-diagonal block matrices are transposes. This symmetry can be exploited and saves computation time with a runtime of only 27 seconds - still far under COMSOL models using traditional FEM methods. 
+$$\mathbf{T}=\mathbf{F}\mathbf{Q}$$
 
-Nondimensionalized heat flux versus time data has excellent agreement with that of the results of Koenraad F. Beckers with RMSE of 2.407 W and MAE of 0.69.
-Nondimensionalization was carried out in the same way
+where \(\mathbf{F}\) is the thermal response matrix constructed from Green's functions, \(\mathbf{Q}\) represents the heat fluxes, and \(\mathbf{T}\) represents the corresponding temperature response. Solving this system enables efficient prediction of transient thermal behavior across different geothermal geometries.
 
-For the third benchmark problem of a geothermal slinky with fluid advecting heat via bulk motion along the slinky, the outlet fluid temperature is also solved via Slender Body Theory - showcasing the versatility of the algorithm to determine various physical information from a system with high time efficiency. The one-turn slinky is initialized at a length of 3.325 meters, a radius of curvature of 0.37, pipe radius of 0.01 meters, pipe thickness of 0.001 meters, pipe thermal conductivity of 1 W/mK, gap between turns is 0.005 meters. The fluid is moving at a bulk speed of 0.1 m/s, density of 1000 kg/m^3, specific heat of 4200 J/kg K, convective heat transfer coefficient h = 1000, and an inlet temperature of constant 20 Celsius. The medium is at an initial temperature of 0C, thermal conductivity of 3 W/mK, and thermal diffusivity of 1e-6 m^2/s. The centerline of the helix is initialized via the parametric equations of a helix and discretized into N = 30 pipe elements. The Slender Body Theory algorithm of matrix inversion is used again here along with additional relations capturing the convective heat transfer of the fluid to the pipe, where Q = T_f - T / R_thermal, where R_thermal is the thermal resistivity, T_f is the fluid temperature, and T is the temperature of the pipe. Substituting the Slender Body Theory derived equation of T = FQ, where F is the matrix consisting of Greens functions solved via decision trees, we achieve a simple MQ = T_f - H_vec equation, where M = (RI + F), I being the NxN identity matrix. The "H_vec" is a vector consisting of contributions of all historical heat pulses, treatment of this is understandable via the code and paper. A backward Euler time stepping scheme is then used to solve the 1D advective equation with an upwind spatial discretization to update the fluid temperature each time step.
+## How It Was Built
 
-Outlet fluid temperature versus time (seconds) data has very excellent agreement with the results of Koenraad F. Beckers. Simulation time is approximately 2 minutes and 47 seconds with linear time steps from 0 to 300 seconds, logarthmic spaced time steps from 300 seconds to 10^7 seconds (115 days) with an RMSE of 1.122 celsius and MAE of 0.558. 
+Developed a Python reduced-order heat-transfer solver by discretizing cylindrical and helical geometries into centerline elements and constructing matrix-based systems of discrete Green's functions. Implemented **Fourier-number-based decision trees** to select appropriate analytical approximations and eliminate negligible thermal interactions, reducing matrix computation without sacrificing benchmark accuracy. Exploited geometric symmetry and block-matrix structure to minimize redundant calculations across multiple interacting boreholes.
 
-A fourth benchmark problem of a rectangular and square grid of geothermal boreholes is simulated to explore SBT runtime with multiple boreholes, often the case with geothermal implementations in real life. For a square grid where every borehole is equidistant from its adjacent neighbor provides high symmetry in the F matrix, which can be again resolved into block matrices. Only adjacent and diagonal interaction must be calculated via SBT due to the square grid set up, providing a run time of only 37 seconds. For a rectangular grid, there are three interactions that must be calculated via SBT: close adjacent, far adjacent, and diagonal. However, runtime is nearly identical with only 33 seconds. 
+Extended the solver to model coupled conduction and fluid convection in a geothermal slinky by incorporating thermal resistance relationships and historical heat-pulse contributions. Implemented backward Euler time integration with first-order upwind spatial discretization to solve the fluid advection equation and predict outlet temperatures. Validated numerical outputs against published benchmarks using RMSE and MAE statistical error analysis.
 
-Nondimensionalized heat flux versus time data has excellent agreement with Koenraad Becker's 2 cylinder setup in the limit that the width the square/rectangular grid is sufficiently large - thus the problem resolves to two cases of two cylinder purely conductive heat transfer as expected. 
+## Results
 
+**Single Cylinder:** Simulated approximately 31 years of transient heat transfer using 10 centerline elements and 150 logarithmically spaced time steps, achieving an RMSE of 2.848 W and MAE of 0.406 W against published benchmark results.
 
+**Two Interacting Cylinders:** Modeled coupled thermal interactions using symmetric block matrices, completing the simulation in 27 seconds with an RMSE of 2.407 W and MAE of 0.69 W.
 
-Seminal paper by Koenraad F. Beckers and primary reference: https://royalsocietypublishing.org/rspa/article/471/2184/20150494/57825/Slender-body-theory-for-transient-heat-conduction
+**Geothermal Slinky:** Simulated coupled conductive and advective heat transfer over approximately 115 days using 30 helical pipe elements, achieving an outlet-temperature RMSE of 1.122°C and MAE of 0.558°C in approximately 2 minutes and 47 seconds.
+
+**Borehole Grids:** Extended the algorithm to square and rectangular multi-borehole configurations, exploiting matrix symmetry to achieve simulation runtimes of 37 and 33 seconds, respectively. Verified convergence toward the two-cylinder benchmark behavior at large borehole separations.
+
+## Technologies
+
+Python, NumPy, SciPy, Pandas, Matplotlib, Slender Body Theory, Discrete Green's Functions, Numerical Linear Algebra, Block-Matrix Optimization, Fourier-Number Asymptotics, Backward Euler, Upwind Discretization, Transient Heat Transfer, Statistical Error Analysis.
+
+## Research Reference
+
+[Slender-body theory for transient heat conduction — Koenraad F. Beckers](https://royalsocietypublishing.org/rspa/article/471/2184/20150494/57825/Slender-body-theory-for-transient-heat-conduction)
